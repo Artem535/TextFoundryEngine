@@ -1,10 +1,23 @@
 {
   "name": "textfoundry-engine",
   "version": "0.1.0",
+  "builtin-baseline": "aa2d37682e3318d93aef87efa7b0e88e81cd3d59",
   "dependencies": [
-    "ctre",
-    "doctest",
-    "reflectcpp",
-    "spdlog"
+    {
+      "name": "ctre",
+      "version>=": "3.10.0"
+    },
+    {
+      "name": "doctest",
+      "version>=": "2.4.12"
+    },
+    {
+      "name": "reflectcpp",
+      "version>=": "0.23.0"
+    },
+    {
+      "name": "spdlog",
+      "version>=": "1.17.0"
+    }
   ]
 }
