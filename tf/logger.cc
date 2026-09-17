@@ -59,7 +59,28 @@ void Logger::init(const std::string& logFile, LogLevel level) {
 }
 
 void Logger::shutdown() {
+  // Drop our own reference first...
   instance_.reset();
+  // ...then explicitly tear down spdlog's global registry while we are still
+  // safely inside a normal function call (not inside the C++ runtime's
+  // exit-time static-destructor sweep).
+  //
+  // spdlog::stderr_color_mt()/basic_logger_mt() register the logger they
+  // create into spdlog::details::registry (a function-local static/Meyer's
+  // singleton). Without this call, that registry keeps its own
+  // std::shared_ptr<logger> alive and only gets torn down implicitly by its
+  // own static destructor at process exit. The relative destruction order
+  // between that registry singleton and other statics/atexit-registered
+  // teardown (including this Logger's own static instance_) is unspecified
+  // across translation units, and was observed to crash
+  // (EXC_BAD_ACCESS inside spdlog::details::registry::~registry(), called
+  // from exit()'s __cxa_finalize_ranges) deterministically on macOS CI and
+  // intermittently on Windows CI once the engine's own doctest binary was
+  // split out and linked as a standalone executable. Calling
+  // spdlog::shutdown() here clears the registry's internal logger map and
+  // thread pools synchronously and deterministically, so its later static
+  // destructor has nothing left to tear down.
+  spdlog::shutdown();
   initialized_ = false;
 }
 
