@@ -1,5 +1,16 @@
-include(FetchContent)
+cmake_minimum_required(VERSION 3.20)
+project(TextFoundryEngine VERSION 0.1.0 LANGUAGES CXX)
 
+set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_BUILD_WITH_INSTALL_RPATH ON)
+
+include(GNUInstallDirs)
+include(FetchContent)
+include(CMakePackageConfigHelpers)
+
+set(TEXTFOUNDRY_INSTALL_CMAKEDIR
+    "${CMAKE_INSTALL_LIBDIR}/cmake/TextFoundry")
 
 # ObjectBox
 FetchContent_Declare(
@@ -9,6 +20,7 @@ FetchContent_Declare(
 )
 
 FetchContent_MakeAvailable(objectbox)
+set(OBJECTBOX_LICENSE_FILE "${objectbox_SOURCE_DIR}/LICENSE.txt")
 
 # Other lib
 find_package(ctre CONFIG REQUIRED)
@@ -77,4 +89,45 @@ install(
         FILES_MATCHING
             PATTERN "*.h"
             PATTERN "*.hpp"
+)
+
+if(WIN32)
+  set(TEXTFOUNDRY_OBJECTBOX_INSTALL_DIR "${CMAKE_INSTALL_BINDIR}")
+else()
+  set(TEXTFOUNDRY_OBJECTBOX_INSTALL_DIR "${CMAKE_INSTALL_LIBDIR}")
+endif()
+
+if(TARGET objectbox)
+  install(FILES $<TARGET_FILE:objectbox>
+    DESTINATION ${TEXTFOUNDRY_OBJECTBOX_INSTALL_DIR}
+  )
+endif()
+
+enable_testing()
+add_subdirectory(tests)
+
+write_basic_package_version_file(
+    "${CMAKE_CURRENT_BINARY_DIR}/TextFoundryConfigVersion.cmake"
+    VERSION ${PROJECT_VERSION}
+    COMPATIBILITY SameMajorVersion
+)
+
+configure_package_config_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/TextFoundryConfig.cmake.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/TextFoundryConfig.cmake"
+    INSTALL_DESTINATION "${TEXTFOUNDRY_INSTALL_CMAKEDIR}"
+)
+
+install(
+    EXPORT TextFoundryTargets
+    FILE TextFoundryTargets.cmake
+    NAMESPACE TextFoundry::
+    DESTINATION "${TEXTFOUNDRY_INSTALL_CMAKEDIR}"
+)
+
+install(
+    FILES
+        "${CMAKE_CURRENT_BINARY_DIR}/TextFoundryConfig.cmake"
+        "${CMAKE_CURRENT_BINARY_DIR}/TextFoundryConfigVersion.cmake"
+    DESTINATION "${TEXTFOUNDRY_INSTALL_CMAKEDIR}"
 )

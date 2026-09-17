@@ -1,0 +1,10 @@
+{
+  "name": "textfoundry-engine",
+  "version": "0.1.0",
+  "dependencies": [
+    "ctre",
+    "doctest",
+    "reflectcpp",
+    "spdlog"
+  ]
+}
