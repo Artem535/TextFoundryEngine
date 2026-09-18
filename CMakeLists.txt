@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(TextFoundryEngine VERSION 0.2.0 LANGUAGES CXX)
+project(TextFoundryEngine VERSION 0.2.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_BUILD_WITH_INSTALL_RPATH ON)
@@ -14,6 +14,13 @@ implementation and Engine::FullInit(). Disable to consume just \
 textfoundry_core (Block/Composition/Version/Renderer, no storage backend, \
 no ObjectBox fetch/build) -- e.g. for a consumer that supplies its own \
 IBlockRepository/ICompositionRepository."
+    ON
+)
+
+option(TEXTFOUNDRY_ENGINE_BUILD_TESTS
+    "Build TextFoundryEngine's own test suite (core_tests). Disable when \
+consuming this project via FetchContent and the consumer does not already \
+depend on doctest -- e.g. CppWiki."
     ON
 )
 
@@ -154,8 +161,10 @@ install(
             PATTERN "*.hpp"
 )
 
-enable_testing()
-add_subdirectory(tests)
+if(TEXTFOUNDRY_ENGINE_BUILD_TESTS)
+  enable_testing()
+  add_subdirectory(tests)
+endif()
 
 write_basic_package_version_file(
     "${CMAKE_CURRENT_BINARY_DIR}/TextFoundryConfigVersion.cmake"
