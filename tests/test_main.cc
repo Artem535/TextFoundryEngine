@@ -2,19 +2,10 @@
 // Created by a.durynin on 29.01.2026.
 //
 
-#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#define DOCTEST_CONFIG_IMPLEMENT
 #include <doctest/doctest.h>
 
 #include "../tf/logger.h"
-
-// Initialize logger before running tests
-struct LoggerSetup {
-  LoggerSetup() {
-    tf::Logger::init(
-        tf::LogLevel::Warn);  // Only warnings and errors during tests
-  }
-  ~LoggerSetup() { tf::Logger::shutdown(); }
-} loggerSetup;
 
 #include "../tf/block.h"
 #include "../tf/block_generation.h"
@@ -1086,4 +1077,27 @@ TEST_CASE_FIXTURE(EngineTestFixture, "validate composition through engine") {
 
   auto err = engine.ValidateComposition("test.comp");
   CHECK(err.is_success());
+}
+
+// Logger init/shutdown run as ordinary statements inside main(), not via a
+// global static object's constructor/destructor. spdlog::shutdown() (called
+// by tf::Logger::shutdown()) must run before the C++ runtime's exit-time
+// static-destructor sweep begins: doing it from a global object's destructor
+// does not achieve that, since that destructor runs *during* the same
+// unspecified-order sweep as spdlog's own registry singleton, and was
+// observed to corrupt the heap / crash inside the registry's destructor on
+// every platform once tf::Logger::shutdown() was made to touch it.
+int main(int argc, char** argv) {
+  tf::Logger::init(tf::LogLevel::Warn);  // Only warnings and errors during tests
+
+  doctest::Context context;
+  context.applyCommandLine(argc, argv);
+  const int result = context.run();
+
+  tf::Logger::shutdown();
+
+  if (context.shouldExit()) {
+    return result;
+  }
+  return result;
 }
