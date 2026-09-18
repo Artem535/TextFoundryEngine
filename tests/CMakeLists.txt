@@ -1,10 +1,19 @@
 find_package(doctest CONFIG REQUIRED)
 
+if(NOT TARGET textfoundry_objectbox_store)
+  message(STATUS
+    "textfoundry_objectbox_store not built "
+    "(TEXTFOUNDRY_ENGINE_BUILD_OBJECTBOX_STORE=OFF): skipping core_tests, "
+    "which exercises Engine::FullInit() via EngineTestFixture."
+  )
+  return()
+endif()
+
 add_executable(core_tests
         test_main.cc
 )
 
-target_link_libraries(core_tests textfoundry_core doctest::doctest)
+target_link_libraries(core_tests textfoundry_core textfoundry_objectbox_store doctest::doctest)
 
 if(UNIX AND TARGET objectbox)
   set_property(TARGET core_tests PROPERTY BUILD_WITH_INSTALL_RPATH OFF)

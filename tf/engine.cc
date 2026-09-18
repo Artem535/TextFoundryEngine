@@ -4,7 +4,6 @@
 
 #include "engine.h"
 
-#include <filesystem>
 #include <regex>
 #include <set>
 #include <sstream>
@@ -12,8 +11,6 @@
 #include <unordered_set>
 
 #include "logger.h"
-#include "objectbox-model.h"
-#include "objectbox_repository.h"
 #include "repository_block_cache.h"
 
 namespace tf {
@@ -1402,24 +1399,6 @@ Error Engine::ValidateBlock(const BlockId& id) {
   return err;
 }
 
-void Engine::FullInit() {
-  // Ensure the database directory exists
-  const bool is_in_memory = config_.default_data_path.starts_with("memory:");
-  if (!is_in_memory && !std::filesystem::exists(config_.default_data_path)) {
-    std::filesystem::create_directories(config_.default_data_path);
-  }
-
-  obx::Options options;
-  options.directory(config_.default_data_path);
-  options.model(create_obx_model());
-
-  auto store = std::make_shared<obx::Store>(options);
-  const std::shared_ptr<IBlockRepository> block_repository =
-      std::make_shared<BlockRepository>(store);
-  const std::shared_ptr<ICompositionRepository> composition_repository =
-      std::make_shared<CompositionRepository>(store);
-
-  SetBlockRepository(block_repository);
-  SetCompositionRepository(composition_repository);
-}
+// Engine::FullInit() lives in engine_objectbox_init.cc -- see that file for
+// why it isn't defined here.
 }  // namespace tf

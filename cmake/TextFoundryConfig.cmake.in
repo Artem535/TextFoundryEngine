@@ -5,10 +5,16 @@ include(CMakeFindDependencyMacro)
 find_dependency(ctre CONFIG REQUIRED)
 find_dependency(spdlog CONFIG REQUIRED)
 find_dependency(reflectcpp CONFIG REQUIRED)
+find_dependency(fmt CONFIG REQUIRED)
 
 include(FetchContent)
 
-if(NOT TARGET objectbox)
+# Only fetch ObjectBox if this installed package actually contains
+# TextFoundry::ObjectBoxStore (baked in from TEXTFOUNDRY_ENGINE_BUILD_OBJECTBOX_STORE
+# at the time this package was built) -- a package built with the option OFF
+# never needed ObjectBox and a find_package(TextFoundry) consumer of it
+# shouldn't fetch/build it either.
+if(@TEXTFOUNDRY_ENGINE_BUILD_OBJECTBOX_STORE@ AND NOT TARGET objectbox)
   FetchContent_Declare(
       objectbox
       GIT_REPOSITORY https://github.com/objectbox/objectbox-c.git
