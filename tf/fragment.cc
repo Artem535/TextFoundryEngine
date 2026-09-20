@@ -96,6 +96,13 @@ ConditionalBuilder& ConditionalBuilder::Else(Fragment fragment) {
   return *this;
 }
 
+ConditionalBuilder& ConditionalBuilder::Else() {
+  if (!cond_.elseContent.has_value()) {
+    cond_.elseContent = std::vector<Fragment>{};
+  }
+  return *this;
+}
+
 Conditional ConditionalBuilder::build() { return std::move(cond_); }
 
 // Fragment implementation
@@ -113,5 +120,24 @@ Error Fragment::validate(bool isDraftContext) const {
         return Error::success();
       },
       data_);
+}
+
+void VisitBlockRefs(const std::vector<Fragment>& fragments,
+                    const std::function<void(const BlockRef&)>& visitor) {
+  for (const auto& fragment : fragments) {
+    if (fragment.IsBlockRef()) {
+      visitor(fragment.AsBlockRef());
+      continue;
+    }
+    if (fragment.IsConditional()) {
+      const Conditional& cond = fragment.AsConditional();
+      for (const auto& branch : cond.branches) {
+        VisitBlockRefs(branch.content, visitor);
+      }
+      if (cond.elseContent.has_value()) {
+        VisitBlockRefs(*cond.elseContent, visitor);
+      }
+    }
+  }
 }
 }  // namespace tf

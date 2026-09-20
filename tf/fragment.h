@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -121,6 +122,15 @@ class ConditionalBuilder {
   ConditionalBuilder& And(Condition condition);
   ConditionalBuilder& Then(Fragment fragment);
   ConditionalBuilder& Else(Fragment fragment);
+
+  /**
+   * Sets elseContent to an explicit, empty vector if it hasn't been set
+   * yet (a no-op if Else(Fragment) or this was already called). This is
+   * the only way to build the valid-but-empty "else renders nothing"
+   * shape via the fluent API -- Else(Fragment) alone can't express it,
+   * since it always pushes at least one fragment.
+   */
+  ConditionalBuilder& Else();
 
   /**
    * Consumes the builder, returning the accumulated Conditional by move.
@@ -273,4 +283,17 @@ class Fragment {
  private:
   std::variant<BlockRef, StaticText, Separator, Conditional> data_;
 };
+
+/**
+ * Recursively visits every BlockRef reachable from a fragment list,
+ * including ones nested inside Conditional branches and elseContent.
+ * Engine-level code that needs to see every BlockRef a Composition could
+ * possibly render (usage checks, rewrite/normalization passes) should use
+ * this instead of walking a fragment list directly and assuming BlockRefs
+ * only ever appear at the top level -- that assumption stopped holding
+ * once Fragment gained the Conditional variant.
+ */
+void VisitBlockRefs(const std::vector<Fragment>& fragments,
+                    const std::function<void(const BlockRef&)>& visitor);
+
 }  // namespace tf

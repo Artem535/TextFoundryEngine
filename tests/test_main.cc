@@ -711,16 +711,20 @@ TEST_SUITE("ConditionalRendering") {
     createAndPublishBlock("cond.intermediate", "intermediate content");
     createAndPublishBlock("cond.beginner", "beginner content");
 
+    // Built via ConditionalBuilder (Task 3), not aggregate-initialized, to
+    // prove the full path connects: builder -> AddConditional -> publish
+    // (which persists through ObjectBox storage) -> Render.
+    auto cond =
+        ConditionalBuilder()
+            .If(Condition{.attribute = "level", .allowedValues = {"expert"}})
+            .Then(Fragment::MakeBlockRef(BlockRef("cond.expert", Version{1, 0})))
+            .If(Condition{.attribute = "level", .allowedValues = {"intermediate"}})
+            .Then(Fragment::MakeBlockRef(
+                BlockRef("cond.intermediate", Version{1, 0})))
+            .Else(Fragment::MakeBlockRef(BlockRef("cond.beginner", Version{1, 0})))
+            .build();
+
     CompositionDraftBuilder builder("cond.elif_chain");
-    Conditional cond;
-    cond.branches.push_back(Branch{
-        .conditions = {Condition{.attribute = "level", .allowedValues = {"expert"}}},
-        .content = {Fragment::MakeBlockRef(BlockRef("cond.expert", Version{1, 0}))}});
-    cond.branches.push_back(Branch{
-        .conditions = {Condition{.attribute = "level", .allowedValues = {"intermediate"}}},
-        .content = {Fragment::MakeBlockRef(BlockRef("cond.intermediate", Version{1, 0}))}});
-    cond.elseContent = std::vector<Fragment>{
-        Fragment::MakeBlockRef(BlockRef("cond.beginner", Version{1, 0}))};
     builder.AddConditional(std::move(cond));
     auto pubResult = engine.PublishComposition(builder.build(), Engine::VersionBump::Minor);
     REQUIRE(pubResult.HasValue());
@@ -831,6 +835,38 @@ TEST_SUITE("ConditionalRendering") {
     auto result = engine.Render("cond.missing_attr");
     REQUIRE(result.HasValue());
     CHECK(result.value().text == "default text");
+  }
+
+  TEST_CASE_FIXTURE(EngineTestFixture,
+                    "explicitly empty elseContent survives an ObjectBox "
+                    "store+load round trip as has_value()==true, not nullopt") {
+    CompositionDraftBuilder builder("cond.empty_else_roundtrip");
+    Conditional cond;
+    cond.branches.push_back(Branch{
+        .conditions = {Condition{.attribute = "level", .allowedValues = {"expert"}}},
+        .content = {Fragment::MakeStaticText("expert text")}});
+    cond.elseContent = std::vector<Fragment>{};  // deliberately empty, not nullopt
+    builder.AddConditional(std::move(cond));
+    auto pubResult = engine.PublishComposition(builder.build(), Engine::VersionBump::Minor);
+    REQUIRE(pubResult.HasValue());
+
+    // Reload from storage directly (not via Render, which would produce
+    // the same empty-text output whether elseContent is an empty vector or
+    // nullopt -- this must inspect the reloaded structure itself to prove
+    // the distinction actually round-trips through JsonToConditional).
+    auto loaded = engine.LoadComposition("cond.empty_else_roundtrip");
+    REQUIRE(loaded.HasValue());
+    REQUIRE(loaded.value().fragments().size() == 1);
+    REQUIRE(loaded.value().fragments()[0].IsConditional());
+    const Conditional& loadedCond = loaded.value().fragments()[0].AsConditional();
+    REQUIRE(loadedCond.elseContent.has_value());
+    CHECK(loadedCond.elseContent->empty());
+
+    // A non-matching context still renders successfully (empty else content).
+    auto ctx = RenderContext{}.WithParam("level", "unknown");
+    auto result = engine.Render("cond.empty_else_roundtrip", ctx);
+    REQUIRE(result.HasValue());
+    CHECK(result.value().text.empty());
   }
 }
 

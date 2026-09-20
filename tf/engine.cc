@@ -21,6 +21,56 @@ std::unordered_set<std::string> DeduplicateTags(
   return std::unordered_set<std::string>(tags.begin(), tags.end());
 }
 
+/**
+ * Rebuilds a fragment list, substituting any BlockRef whose block was
+ * rewritten (per published_by_id) with a ref to the new published version,
+ * preserving Conditional structure by recursing into branches/elseContent
+ * rather than passing rewritten-but-nested BlockRefs through unchanged.
+ */
+std::vector<Fragment> RewriteFragmentBlockRefs(
+    const std::vector<Fragment>& fragments,
+    const std::unordered_map<BlockId, PublishedBlock>& published_by_id) {
+  std::vector<Fragment> result;
+  result.reserve(fragments.size());
+
+  for (const auto& fragment : fragments) {
+    if (fragment.IsBlockRef()) {
+      const auto& block_ref = fragment.AsBlockRef();
+      auto rewritten = published_by_id.find(block_ref.GetBlockId());
+      if (rewritten != published_by_id.end()) {
+        result.push_back(Fragment::MakeBlockRef(
+            BlockRef(rewritten->second.ref().GetBlockId(),
+                    rewritten->second.version(), block_ref.LocalParams())));
+      } else {
+        result.push_back(fragment);
+      }
+      continue;
+    }
+
+    if (fragment.IsConditional()) {
+      const Conditional& cond = fragment.AsConditional();
+      Conditional rewrittenCond;
+      for (const auto& branch : cond.branches) {
+        Branch rewrittenBranch;
+        rewrittenBranch.conditions = branch.conditions;
+        rewrittenBranch.content =
+            RewriteFragmentBlockRefs(branch.content, published_by_id);
+        rewrittenCond.branches.push_back(std::move(rewrittenBranch));
+      }
+      if (cond.elseContent.has_value()) {
+        rewrittenCond.elseContent =
+            RewriteFragmentBlockRefs(*cond.elseContent, published_by_id);
+      }
+      result.push_back(Fragment::MakeConditional(std::move(rewrittenCond)));
+      continue;
+    }
+
+    result.push_back(fragment);
+  }
+
+  return result;
+}
+
 bool IsValidGeneratedBlockId(const std::string& id) {
   static const std::regex kPattern(
       R"(^[a-z0-9][a-z0-9_]*(\.[a-z0-9][a-z0-9_]*)*$)");
@@ -307,13 +357,17 @@ Error Engine::DeleteBlock(const BlockId& id) {
         continue;
       }
 
-      for (const auto& fragment : composition_result.value().fragments()) {
-        if (fragment.IsBlockRef() && fragment.AsBlockRef().GetBlockId() == id) {
-          return Error{
-              ErrorCode::InvalidStateTransition,
-              fmt::format("Block is used by composition {}@{}.{}",
-                          composition_id, version.major, version.minor)};
-        }
+      bool usedByComposition = false;
+      VisitBlockRefs(composition_result.value().fragments(),
+                    [&](const BlockRef& blockRef) {
+                      usedByComposition =
+                          usedByComposition || blockRef.GetBlockId() == id;
+                    });
+      if (usedByComposition) {
+        return Error{
+            ErrorCode::InvalidStateTransition,
+            fmt::format("Block is used by composition {}@{}.{}",
+                        composition_id, version.major, version.minor)};
       }
     }
   }
@@ -569,13 +623,12 @@ Result<PublishedComposition> Engine::PublishComposition(CompositionDraft draft,
               "Only Draft compositions can be published"});
   }
 
-  for (const auto& frag : comp.fragments()) {
-    if (frag.IsBlockRef()) {
-      const auto& ref = frag.AsBlockRef();
-      if (ref.UseLatest()) {
-        return Result<PublishedComposition>(Error::VersionRequired());
-      }
-    }
+  bool hasUseLatestRef = false;
+  VisitBlockRefs(comp.fragments(), [&](const BlockRef& ref) {
+    hasUseLatestRef = hasUseLatestRef || ref.UseLatest();
+  });
+  if (hasUseLatestRef) {
+    return Result<PublishedComposition>(Error::VersionRequired());
   }
 
   Version next_version{1, 0};
@@ -609,10 +662,12 @@ Result<PublishedComposition> Engine::PublishComposition(
         Error{ErrorCode::DuplicateId, "Composition version already exists"});
   }
 
-  for (const auto& frag : comp.fragments()) {
-    if (frag.IsBlockRef() && frag.AsBlockRef().UseLatest()) {
-      return Result<PublishedComposition>(Error::VersionRequired());
-    }
+  bool hasUseLatestRef = false;
+  VisitBlockRefs(comp.fragments(), [&](const BlockRef& ref) {
+    hasUseLatestRef = hasUseLatestRef || ref.UseLatest();
+  });
+  if (hasUseLatestRef) {
+    return Result<PublishedComposition>(Error::VersionRequired());
   }
 
   return PublishCompositionInternal(std::move(comp), explicit_version);
@@ -864,6 +919,12 @@ Result<NormalizedCompositionPreview> Engine::PreviewNormalizeComposition(
           fragment_texts.push_back(fragment.AsStaticText().text());
           continue;
         }
+        if (fragment.IsConditional()) {
+          return Result<NormalizedCompositionPreview>(
+              Error{ErrorCode::InvalidParamType,
+                    "Normalization does not yet support compositions "
+                    "containing Conditional content"});
+        }
         const auto& block_ref = fragment.AsBlockRef();
         auto block_result = block_ref.version().has_value()
                                 ? LoadBlock(block_ref.GetBlockId(),
@@ -905,6 +966,13 @@ Result<NormalizedCompositionPreview> Engine::PreviewNormalizeComposition(
       }
       fragment_texts.push_back(std::move(text));
       continue;
+    }
+
+    if (fragment.IsConditional()) {
+      return Result<NormalizedCompositionPreview>(
+          Error{ErrorCode::InvalidParamType,
+                "Normalization does not yet support compositions "
+                "containing Conditional content"});
     }
 
     const auto& block_ref = fragment.AsBlockRef();
@@ -1033,6 +1101,14 @@ Result<NormalizedCompositionResult> Engine::NormalizeComposition(
       continue;
     }
 
+    if (fragment.IsConditional()) {
+      // Normalization doesn't recurse into Conditional branches yet --
+      // pass the whole subtree through unchanged rather than dropping it
+      // or normalizing only part of it.
+      builder.AddConditional(fragment.AsConditional());
+      continue;
+    }
+
     const auto& block_ref = fragment.AsBlockRef();
     auto block_result = block_ref.version().has_value()
                             ? LoadBlock(block_ref.GetBlockId(), *block_ref.version())
@@ -1157,15 +1233,14 @@ Result<CompositionBlockRewritePreview> Engine::PreviewCompositionBlockRewrite(
   };
 
   std::unordered_set<BlockId> seen_block_ids;
-  for (const auto& fragment : source.fragments()) {
-    if (!fragment.IsBlockRef()) {
-      continue;
+  std::vector<BlockRef> unique_block_refs;
+  VisitBlockRefs(source.fragments(), [&](const BlockRef& block_ref) {
+    if (seen_block_ids.insert(block_ref.GetBlockId()).second) {
+      unique_block_refs.push_back(block_ref);
     }
-    const auto& block_ref = fragment.AsBlockRef();
-    if (seen_block_ids.contains(block_ref.GetBlockId())) {
-      continue;
-    }
+  });
 
+  for (const auto& block_ref : unique_block_refs) {
     auto block_result = block_ref.version().has_value()
                             ? LoadBlock(block_ref.GetBlockId(), *block_ref.version())
                             : LoadBlock(block_ref.GetBlockId());
@@ -1183,7 +1258,6 @@ Result<CompositionBlockRewritePreview> Engine::PreviewCompositionBlockRewrite(
         .tags = SortedTags(source_block.tags()),
         .templ = source_block.templ().Content(),
     });
-    seen_block_ids.insert(source_block.Id());
   }
 
   auto preview = compositionBlockRewriter_->PreviewRewrite(context);
@@ -1233,14 +1307,16 @@ Result<AppliedCompositionBlockRewriteResult> Engine::ApplyCompositionBlockRewrit
   }
 
   std::unordered_map<BlockId, Block> source_blocks_by_id;
-  for (const auto& fragment : source.fragments()) {
-    if (!fragment.IsBlockRef()) {
-      continue;
-    }
-    const auto& block_ref = fragment.AsBlockRef();
-    if (source_blocks_by_id.contains(block_ref.GetBlockId())) {
-      continue;
-    }
+  std::vector<BlockRef> unique_block_refs;
+  {
+    std::unordered_set<BlockId> seen_block_ids;
+    VisitBlockRefs(source.fragments(), [&](const BlockRef& block_ref) {
+      if (seen_block_ids.insert(block_ref.GetBlockId()).second) {
+        unique_block_refs.push_back(block_ref);
+      }
+    });
+  }
+  for (const auto& block_ref : unique_block_refs) {
     auto block_result = block_ref.version().has_value()
                             ? LoadBlock(block_ref.GetBlockId(), *block_ref.version())
                             : LoadBlock(block_ref.GetBlockId());
@@ -1317,6 +1393,17 @@ Result<AppliedCompositionBlockRewriteResult> Engine::ApplyCompositionBlockRewrit
     }
     if (fragment.IsStaticText()) {
       builder.AddStaticText(fragment.AsStaticText().text());
+      continue;
+    }
+
+    if (fragment.IsConditional()) {
+      // Rewrite BlockRefs nested inside branches/elseContent the same way
+      // as top-level ones, instead of passing the subtree through
+      // untouched -- a block referenced only from inside a Conditional
+      // can still have been rewritten (see RewriteFragmentBlockRefs).
+      auto rewrittenConditional =
+          RewriteFragmentBlockRefs({fragment}, published_by_id);
+      builder.AddConditional(rewrittenConditional.front().AsConditional());
       continue;
     }
 

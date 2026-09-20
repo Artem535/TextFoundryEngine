@@ -149,14 +149,16 @@ Error Composition::publish(Version new_version) {
     return err;
   }
 
-  // Check all BlockRefs have versions (not UseLatest)
-  for (const auto& fragment : fragments_) {
-    if (fragment.IsBlockRef()) {
-      const auto& blockRef = fragment.AsBlockRef();
-      if (blockRef.UseLatest()) {
-        return Error::VersionRequired();
-      }
+  // Check all BlockRefs have versions (not UseLatest), including ones
+  // nested inside Conditional branches/elseContent.
+  Error useLatestErr = Error::success();
+  VisitBlockRefs(fragments_, [&](const BlockRef& blockRef) {
+    if (useLatestErr.is_success() && blockRef.UseLatest()) {
+      useLatestErr = Error::VersionRequired();
     }
+  });
+  if (useLatestErr.is_error()) {
+    return useLatestErr;
   }
 
   state_ = BlockState::Published;

@@ -140,6 +140,13 @@ Result<std::string> Renderer::RenderFragment(
 
     case FragmentType::Separator:
       return Result<std::string>(fragment.AsSeparator().toString());
+
+    case FragmentType::Conditional:
+      // Unreachable in practice: Render() always resolves Conditionals via
+      // ResolveConditionals before this function ever sees a fragment.
+      return Result<std::string>(
+          Error{ErrorCode::InvalidParamType,
+                "Conditional fragment reached RenderFragment unresolved"});
   }
   return Result<std::string>(
       Error{ErrorCode::InvalidParamType, "Unknown fragment type"});
@@ -220,7 +227,15 @@ std::vector<Fragment> Renderer::ResolveConditionals(
 
     if (selected == nullptr) {
       // validate() guarantees elseContent is set for any published
-      // Composition; Render() only ever operates on Published input.
+      // Composition, but Render() loads its input from storage rather
+      // than validating the in-memory object again -- so this is a
+      // defensive check, not a redundant one. Degrade to "renders
+      // nothing" rather than dereferencing a possibly-disengaged
+      // optional; it can't mask a real authoring bug, since validate()
+      // already rejects this shape before anything can be published.
+      if (!cond.elseContent.has_value()) {
+        continue;
+      }
       selected = &(*cond.elseContent);
     }
 
