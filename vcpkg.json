@@ -4,6 +4,10 @@
   "builtin-baseline": "aa2d37682e3318d93aef87efa7b0e88e81cd3d59",
   "dependencies": [
     {
+      "name": "cli11",
+      "version>=": "2.6.1"
+    },
+    {
       "name": "ctre",
       "version>=": "3.10.0"
     },
@@ -18,6 +22,10 @@
     {
       "name": "spdlog",
       "version>=": "1.17.0"
+    },
+    {
+      "name": "ftxui",
+      "version>=": "7.0.0"
     }
   ]
 }

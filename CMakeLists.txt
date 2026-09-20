@@ -24,6 +24,11 @@ depend on doctest -- e.g. CppWiki."
     ON
 )
 
+option(TEXTFOUNDRY_ENGINE_BUILD_CLI
+    "Build tfe, a standalone CLI for exercising the engine directly. Requires TEXTFOUNDRY_ENGINE_BUILD_OBJECTBOX_STORE."
+    ON
+)
+
 set(TEXTFOUNDRY_INSTALL_CMAKEDIR
     "${CMAKE_INSTALL_LIBDIR}/cmake/TextFoundry")
 
@@ -164,6 +169,18 @@ install(
 if(TEXTFOUNDRY_ENGINE_BUILD_TESTS)
   enable_testing()
   add_subdirectory(tests)
+endif()
+
+if(TEXTFOUNDRY_ENGINE_BUILD_CLI)
+  if(TEXTFOUNDRY_ENGINE_BUILD_OBJECTBOX_STORE AND TARGET textfoundry_objectbox_store)
+    find_package(CLI11 CONFIG REQUIRED)
+    find_package(ftxui CONFIG REQUIRED)
+    add_subdirectory(cli)
+  else()
+    message(STATUS
+      "tfe not built because TEXTFOUNDRY_ENGINE_BUILD_OBJECTBOX_STORE=OFF"
+    )
+  endif()
 endif()
 
 write_basic_package_version_file(
