@@ -397,12 +397,14 @@ const obx::Property<ObxFragment, OBXPropertyType_Bool> ObxFragment_::refUseLates
 const obx::Property<ObxFragment, OBXPropertyType_String> ObxFragment_::refLocalParamsJson(9);
 const obx::Property<ObxFragment, OBXPropertyType_String> ObxFragment_::staticContent(10);
 const obx::Property<ObxFragment, OBXPropertyType_Byte> ObxFragment_::separatorType(11);
+const obx::Property<ObxFragment, OBXPropertyType_String> ObxFragment_::conditionalJson(12);
 
 void ObxFragment::_OBX_MetaInfo::toFlatBuffer(flatbuffers::FlatBufferBuilder& fbb, const ObxFragment& object) {
     fbb.Clear();
     auto offsetrefBlockId = fbb.CreateString(object.refBlockId);
     auto offsetrefLocalParamsJson = fbb.CreateString(object.refLocalParamsJson);
     auto offsetstaticContent = fbb.CreateString(object.staticContent);
+    auto offsetconditionalJson = fbb.CreateString(object.conditionalJson);
     flatbuffers::uoffset_t fbStart = fbb.StartTable();
     fbb.AddElement(4, object.id);
     fbb.AddElement(6, object.compositionId);
@@ -415,6 +417,7 @@ void ObxFragment::_OBX_MetaInfo::toFlatBuffer(flatbuffers::FlatBufferBuilder& fb
     fbb.AddOffset(20, offsetrefLocalParamsJson);
     fbb.AddOffset(22, offsetstaticContent);
     fbb.AddElement(24, object.separatorType);
+    fbb.AddOffset(26, offsetconditionalJson);
     flatbuffers::Offset<flatbuffers::Table> offset;
     offset.o = fbb.EndTable(fbStart);
     fbb.Finish(offset);
@@ -467,6 +470,14 @@ void ObxFragment::_OBX_MetaInfo::fromFlatBuffer(const void* data, size_t, ObxFra
         }
     }
     outObject.separatorType = table->GetField<int8_t>(24, 0);
+    {
+        auto* ptr = table->GetPointer<const flatbuffers::String*>(26);
+        if (ptr) {
+            outObject.conditionalJson.assign(ptr->c_str(), ptr->size());
+        } else {
+            outObject.conditionalJson.clear();
+        }
+    }
 }
 
 const obx::Property<ObxLanguage, OBXPropertyType_Long> ObxLanguage_::id(1);

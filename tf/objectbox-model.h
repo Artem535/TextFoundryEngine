@@ -131,7 +131,8 @@ static inline OBX_model* create_obx_model() {
     obx_model_property(model, "refLocalParamsJson", OBXPropertyType_String, 9, 7046732965454170876);
     obx_model_property(model, "staticContent", OBXPropertyType_String, 10, 4698235504011685801);
     obx_model_property(model, "separatorType", OBXPropertyType_Byte, 11, 3231432327656398169);
-    obx_model_entity_last_property_id(model, 11, 3231432327656398169);
+    obx_model_property(model, "conditionalJson", OBXPropertyType_String, 12, 4652074642894527854);
+    obx_model_entity_last_property_id(model, 12, 4652074642894527854);
     
     obx_model_entity(model, "ObxLanguage", 6, 8588892787323218115);
     obx_model_property(model, "id", OBXPropertyType_Long, 1, 3403811722043389900);

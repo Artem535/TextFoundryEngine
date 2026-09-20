@@ -154,7 +154,7 @@ inline int8_t SeparatorTypeToObxSeparatorType(SeparatorType type) {
 
 /**
  * Convert ObxFragment fragment type (int8_t) to FragmentType enum
- * 0=BlockRef, 1=StaticText, 2=Separator
+ * 0=BlockRef, 1=StaticText, 2=Separator, 3=Conditional
  */
 inline FragmentType ObxFragmentTypeToFragmentType(int8_t type) {
   switch (type) {
@@ -164,6 +164,8 @@ inline FragmentType ObxFragmentTypeToFragmentType(int8_t type) {
       return FragmentType::StaticText;
     case 2:
       return FragmentType::Separator;
+    case 3:
+      return FragmentType::Conditional;
     default:
       return FragmentType::StaticText;
   }
@@ -180,6 +182,8 @@ inline int8_t FragmentTypeToObxFragmentType(FragmentType type) {
       return 1;
     case FragmentType::Separator:
       return 2;
+    case FragmentType::Conditional:
+      return 3;
   }
   return 1;  // StaticText as default
 }
@@ -330,6 +334,193 @@ inline ObxComposition composition_to_obx_composition(const Composition& comp,
 }
 
 // ============================================================================
+// Conditional JSON Encoding
+//
+// Unlike BlockRef/StaticText/Separator, a Conditional fragment holds a
+// nested Fragment tree (Branch::content, Conditional::elseContent). Fragment
+// cannot be reflected directly by reflect-cpp (it has a private
+// std::variant member), so this encodes/decodes the tree by hand through
+// rfl::Generic, a dynamic JSON value type, storing the result as a single
+// JSON string in ObxFragment::conditionalJson.
+// ============================================================================
+
+inline rfl::Generic FragmentToGeneric(const Fragment& fragment);
+inline Fragment GenericToFragment(const rfl::Generic& generic);
+
+inline rfl::Generic ConditionToGeneric(const Condition& condition) {
+  rfl::Generic::Object obj;
+  obj["attribute"] = condition.attribute;
+  rfl::Generic::Array allowedValues;
+  for (const auto& value : condition.allowedValues) {
+    allowedValues.emplace_back(rfl::Generic(value));
+  }
+  obj["allowedValues"] = allowedValues;
+  obj["negate"] = condition.negate;
+  return obj;
+}
+
+inline Condition GenericToCondition(const rfl::Generic& generic) {
+  Condition condition;
+  auto obj = generic.to_object().value();
+  condition.attribute = obj.get("attribute").value().to_string().value();
+  for (const auto& v : obj.get("allowedValues").value().to_array().value()) {
+    condition.allowedValues.insert(v.to_string().value());
+  }
+  condition.negate = obj.get("negate").value().to_bool().value();
+  return condition;
+}
+
+inline rfl::Generic BranchToGeneric(const Branch& branch) {
+  rfl::Generic::Object obj;
+  rfl::Generic::Array conditions;
+  for (const auto& condition : branch.conditions) {
+    conditions.emplace_back(ConditionToGeneric(condition));
+  }
+  obj["conditions"] = conditions;
+  rfl::Generic::Array content;
+  for (const auto& fragment : branch.content) {
+    content.emplace_back(FragmentToGeneric(fragment));
+  }
+  obj["content"] = content;
+  return obj;
+}
+
+inline Branch GenericToBranch(const rfl::Generic& generic) {
+  Branch branch;
+  auto obj = generic.to_object().value();
+  for (const auto& c : obj.get("conditions").value().to_array().value()) {
+    branch.conditions.push_back(GenericToCondition(c));
+  }
+  for (const auto& f : obj.get("content").value().to_array().value()) {
+    branch.content.push_back(GenericToFragment(f));
+  }
+  return branch;
+}
+
+inline rfl::Generic ConditionalToGeneric(const Conditional& cond) {
+  rfl::Generic::Object obj;
+  rfl::Generic::Array branches;
+  for (const auto& branch : cond.branches) {
+    branches.emplace_back(BranchToGeneric(branch));
+  }
+  obj["branches"] = branches;
+  if (cond.elseContent.has_value()) {
+    rfl::Generic::Array elseContent;
+    for (const auto& fragment : *cond.elseContent) {
+      elseContent.emplace_back(FragmentToGeneric(fragment));
+    }
+    obj["elseContent"] = elseContent;
+  } else {
+    obj["elseContent"] = rfl::Generic::Null;
+  }
+  return obj;
+}
+
+inline Conditional GenericToConditional(const rfl::Generic& generic) {
+  Conditional cond;
+  auto obj = generic.to_object().value();
+  for (const auto& b : obj.get("branches").value().to_array().value()) {
+    cond.branches.push_back(GenericToBranch(b));
+  }
+  auto elseGeneric = obj.get("elseContent").value();
+  if (!elseGeneric.is_null()) {
+    std::vector<Fragment> elseContent;
+    for (const auto& f : elseGeneric.to_array().value()) {
+      elseContent.push_back(GenericToFragment(f));
+    }
+    cond.elseContent = std::move(elseContent);
+  }
+  return cond;
+}
+
+inline rfl::Generic FragmentToGeneric(const Fragment& fragment) {
+  rfl::Generic::Object obj;
+  switch (fragment.type()) {
+    case FragmentType::BlockRef: {
+      const BlockRef& ref = fragment.AsBlockRef();
+      obj["type"] = std::string("block_ref");
+      obj["blockId"] = ref.GetBlockId();
+      obj["useLatest"] = ref.UseLatest();
+      if (ref.version().has_value()) {
+        obj["versionMajor"] = static_cast<int64_t>(ref.version()->major);
+        obj["versionMinor"] = static_cast<int64_t>(ref.version()->minor);
+      } else {
+        obj["versionMajor"] = static_cast<int64_t>(0);
+        obj["versionMinor"] = static_cast<int64_t>(0);
+      }
+      obj["localParamsJson"] = rfl::json::write(ref.LocalParams());
+      break;
+    }
+    case FragmentType::StaticText: {
+      obj["type"] = std::string("static_text");
+      obj["text"] = fragment.AsStaticText().text();
+      break;
+    }
+    case FragmentType::Separator: {
+      obj["type"] = std::string("separator");
+      obj["separatorType"] = static_cast<int64_t>(
+          SeparatorTypeToObxSeparatorType(fragment.AsSeparator().type));
+      break;
+    }
+    case FragmentType::Conditional: {
+      obj["type"] = std::string("conditional");
+      obj["conditional"] = ConditionalToGeneric(fragment.AsConditional());
+      break;
+    }
+  }
+  return obj;
+}
+
+inline Fragment GenericToFragment(const rfl::Generic& generic) {
+  auto obj = generic.to_object().value();
+  std::string type = obj.get("type").value().to_string().value();
+
+  if (type == "block_ref") {
+    BlockRef ref;
+    ref.SetBlockId(obj.get("blockId").value().to_string().value());
+    bool useLatest = obj.get("useLatest").value().to_bool().value();
+    ref.SetUseLatest(useLatest);
+    if (!useLatest) {
+      auto major = obj.get("versionMajor").value().to_int().value();
+      auto minor = obj.get("versionMinor").value().to_int().value();
+      ref.SetVersion(Version{static_cast<uint16_t>(major),
+                             static_cast<uint16_t>(minor)});
+    }
+    auto localParamsJson = obj.get("localParamsJson").value().to_string().value();
+    if (!localParamsJson.empty()) {
+      ref.SetLocalParams(rfl::json::read<Params>(localParamsJson).value());
+    }
+    return Fragment::MakeBlockRef(std::move(ref));
+  }
+
+  if (type == "static_text") {
+    return Fragment::MakeStaticText(obj.get("text").value().to_string().value());
+  }
+
+  if (type == "separator") {
+    auto sepTypeInt = obj.get("separatorType").value().to_int().value();
+    return Fragment::MakeSeparator(
+        ObxSeparatorTypeToSeparatorType(static_cast<int8_t>(sepTypeInt)));
+  }
+
+  if (type == "conditional") {
+    return Fragment::MakeConditional(
+        GenericToConditional(obj.get("conditional").value()));
+  }
+
+  // Fallback, matches ObxFragmentToFragment's own unknown-type fallback.
+  return Fragment::MakeStaticText("");
+}
+
+inline std::string ConditionalToJson(const Conditional& cond) {
+  return rfl::json::write(ConditionalToGeneric(cond));
+}
+
+inline Conditional JsonToConditional(const std::string& json) {
+  return GenericToConditional(rfl::json::read<rfl::Generic>(json).value());
+}
+
+// ============================================================================
 // Fragment Conversion
 // ============================================================================
 
@@ -363,6 +554,11 @@ inline Fragment ObxFragmentToFragment(const ObxFragment& obxFrag) {
       SeparatorType sepType =
           ObxSeparatorTypeToSeparatorType(obxFrag.separatorType);
       return Fragment::MakeSeparator(sepType);
+    }
+
+    case FragmentType::Conditional: {
+      return Fragment::MakeConditional(
+          JsonToConditional(obxFrag.conditionalJson));
     }
   }
 
@@ -407,6 +603,11 @@ inline ObxFragment fragment_to_obx_fragment(const Fragment& fragment,
     case FragmentType::Separator: {
       obxFrag.separatorType =
           SeparatorTypeToObxSeparatorType(fragment.AsSeparator().type);
+      break;
+    }
+
+    case FragmentType::Conditional: {
+      obxFrag.conditionalJson = ConditionalToJson(fragment.AsConditional());
       break;
     }
   }

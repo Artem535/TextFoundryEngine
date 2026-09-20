@@ -115,7 +115,7 @@ table ObxFragment {
     /// Order index within composition
     /// objectbox:index
     orderIndex: uint;
-    /// Fragment type: 0=BlockRef, 1=StaticText, 2=Separator
+    /// Fragment type: 0=BlockRef, 1=StaticText, 2=Separator, 3=Conditional
     fragmentType: byte;
     /// For BlockRef: referenced block ID
     refBlockId: string;
@@ -131,6 +131,10 @@ table ObxFragment {
     staticContent: string;
     /// For Separator: separator type (0=None, 1=Newline, 2=Paragraph, 3=Hr)
     separatorType: byte;
+    /// For Conditional: JSON-encoded branches/conditions/elseContent
+    /// (including nested Fragments), see ConditionalToJson/JsonToConditional
+    /// in obx_utils.hpp
+    conditionalJson: string;
 }
 
 table ObxComposition {

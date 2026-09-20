@@ -269,7 +269,7 @@ struct ObxFragment {
     obx_id compositionId;
     /// Order index within composition
     uint32_t orderIndex;
-    /// Fragment type: 0=BlockRef, 1=StaticText, 2=Separator
+    /// Fragment type: 0=BlockRef, 1=StaticText, 2=Separator, 3=Conditional
     int8_t fragmentType;
     /// For BlockRef: referenced block ID
     std::string refBlockId;
@@ -285,6 +285,10 @@ struct ObxFragment {
     std::string staticContent;
     /// For Separator: separator type (0=None, 1=Newline, 2=Paragraph, 3=Hr)
     int8_t separatorType;
+    /// For Conditional: JSON-encoded branches/conditions/elseContent
+    /// (including nested Fragments), see ConditionalToJson/JsonToConditional
+    /// in obx_utils.hpp
+    std::string conditionalJson;
 
     struct _OBX_MetaInfo {
         static constexpr obx_schema_id entityId() { return 5; }
@@ -317,6 +321,7 @@ struct ObxFragment_ {
     static const obx::Property<ObxFragment, OBXPropertyType_String> refLocalParamsJson;
     static const obx::Property<ObxFragment, OBXPropertyType_String> staticContent;
     static const obx::Property<ObxFragment, OBXPropertyType_Byte> separatorType;
+    static const obx::Property<ObxFragment, OBXPropertyType_String> conditionalJson;
 };
 
 
