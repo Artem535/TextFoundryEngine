@@ -63,28 +63,4 @@ if(NOT list_result EQUAL 0 OR NOT list_output MATCHES "\"ids\"")
           "JSON list failed: ${list_result} ${list_output} ${list_error}")
 endif()
 
-execute_process(
-  COMMAND "${TFE}" --data "${DATA}" block create hello --template "Hello"
-  RESULT_VARIABLE create_result
-  OUTPUT_VARIABLE create_output
-  ERROR_VARIABLE create_error
-)
-if(NOT create_result EQUAL 0)
-  message(FATAL_ERROR
-          "Block setup for completion failed: ${create_result} ${create_error}")
-endif()
-
-execute_process(
-  COMMAND "${TFE}" --data "${DATA}" __complete block hel
-  RESULT_VARIABLE dynamic_result
-  OUTPUT_VARIABLE dynamic_output
-  ERROR_VARIABLE dynamic_error
-)
-if(NOT dynamic_result EQUAL 0 OR NOT dynamic_output MATCHES "hello" OR
-   NOT dynamic_error STREQUAL "")
-  message(FATAL_ERROR
-          "Dynamic completion failed: ${dynamic_result} ${dynamic_output} "
-          "${dynamic_error}")
-endif()
-
 file(REMOVE_RECURSE "${DATA}")

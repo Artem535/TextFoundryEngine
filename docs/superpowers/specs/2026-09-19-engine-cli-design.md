@@ -162,11 +162,8 @@ drift apart.
 
 `tfe completion <shell>` writes only the generated script to stdout. The first
 version completes command names, fixed choices, and JSON file paths. It does
-not open the ObjectBox store while generating the script. At completion time,
-the generated shell function may invoke the internal `tfe __complete` protocol
-to query and prefix-filter block/composition IDs for entity-taking commands;
-`__complete` is registered only for that request and is omitted from normal
-help output.
+not open the ObjectBox store or complete dynamic block/composition IDs; that
+can be added later without changing the parser contract.
 
 ## 4. Build Wiring
 

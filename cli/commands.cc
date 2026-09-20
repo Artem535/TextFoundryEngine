@@ -12,8 +12,6 @@
 #include "completion.h"
 #include "dto.h"
 
-#include "../tf/logger.h"
-
 namespace cli {
 namespace {
 
@@ -25,6 +23,7 @@ struct BlockWriteArgs {
   std::string language = "en";
   std::string revision_comment;
   std::string version;
+  std::string bump = "minor";
   std::vector<std::string> defaults;
   std::vector<std::string> tags;
 };
@@ -168,61 +167,133 @@ void AddBlockWriteCommand(CLI::App& parent, AppState& state,
   command->fallthrough();
   auto args = std::make_shared<BlockWriteArgs>();
   command->add_option("id", args->id, "Block identifier")->required();
-  command->add_option("-t,--template", args->template_text,
-                      "Template text")->required();
-  command->add_option("--type", args->type, "Block type");
-  command->add_option("--description", args->description, "Description");
-  command->add_option("--language", args->language, "Language");
+  auto* template_option = command->add_option(
+      "-t,--template", args->template_text,
+      update ? "Template text (defaults to the current published template)"
+             : "Template text");
+  auto* type_option = command->add_option(
+      "--type", args->type,
+      update ? "Block type (defaults to the current published type)"
+             : "Block type");
+  auto* description_option = command->add_option(
+      "--description", args->description,
+      update ? "Description (defaults to the current published description)"
+             : "Description");
+  auto* language_option = command->add_option(
+      "--language", args->language,
+      update ? "Language (defaults to the current published language)"
+             : "Language");
   command->add_option("--revision-comment", args->revision_comment,
                       "Revision comment");
-  command->add_option("--default", args->defaults,
-                      "Default parameter as key=value")
-      ->allow_extra_args(false)
-      ->expected(1);
-  command->add_option("--tag", args->tags, "Block tag");
-  command->add_option("--version", args->version,
-                      "Explicit major.minor version");
+  auto* defaults_option =
+      command
+          ->add_option("--default", args->defaults,
+                       update ? "Default parameter as key=value (defaults "
+                                "to the current published defaults)"
+                              : "Default parameter as key=value")
+          ->allow_extra_args(false)
+          ->expected(1);
+  auto* tags_option = command->add_option(
+      "--tag", args->tags,
+      update ? "Block tag (defaults to the current published tags)"
+             : "Block tag");
+  if (update) {
+    command
+        ->add_option("--bump", args->bump,
+                     "Version bump for the new version: major or minor "
+                     "(default: minor)")
+        ->check(CLI::IsMember({"major", "minor"}));
+  } else {
+    template_option->required();
+    command->add_option("--version", args->version,
+                        "Explicit major.minor version");
+  }
 
-  command->callback([&state, args, update] {
-    auto type = ParseBlockType(args->type);
-    if (type.HasError()) {
-      state.Fail(type.error());
+  command->callback([&state, args, update, template_option, type_option,
+                     description_option, language_option, defaults_option,
+                     tags_option] {
+    std::optional<tf::Block> existing;
+    if (update) {
+      auto loaded = state.EnsureEngine().LoadBlock(args->id);
+      if (loaded.HasError()) {
+        state.Fail(loaded.error());
+        return;
+      }
+      existing = std::move(loaded.value());
+    }
+
+    tf::Result<tf::BlockType> type_result =
+        (type_option->count() > 0 || !existing.has_value())
+            ? ParseBlockType(args->type)
+            : tf::Result<tf::BlockType>(existing->type());
+    if (type_result.HasError()) {
+      state.Fail(type_result.error());
       return;
     }
-    auto defaults = ParseParams(args->defaults);
-    if (defaults.HasError()) {
-      state.Fail(defaults.error());
+    const tf::BlockType resolved_type = type_result.value();
+
+    tf::Result<tf::Params> defaults_result =
+        (defaults_option->count() > 0 || !existing.has_value())
+            ? ParseParams(args->defaults)
+            : tf::Result<tf::Params>(existing->defaults());
+    if (defaults_result.HasError()) {
+      state.Fail(defaults_result.error());
       return;
     }
+    const tf::Params& resolved_defaults = defaults_result.value();
+
+    const std::string resolved_template =
+        (template_option->count() > 0 || !existing.has_value())
+            ? args->template_text
+            : existing->templ().Content();
+    if (resolved_template.empty()) {
+      state.Fail(tf::Error{tf::ErrorCode::InvalidParamType,
+                           "--template is required"});
+      return;
+    }
+    const std::string resolved_description =
+        (description_option->count() > 0 || !existing.has_value())
+            ? args->description
+            : existing->description();
+    const std::string resolved_language =
+        (language_option->count() > 0 || !existing.has_value())
+            ? args->language
+            : existing->language();
 
     tf::BlockDraftBuilder builder(args->id);
-    builder.WithType(type.value())
-        .WithTemplate(tf::Template(args->template_text))
-        .WithDefaults(defaults.value())
-        .WithDescription(args->description)
-        .WithLanguage(args->language)
+    builder.WithType(resolved_type)
+        .WithTemplate(tf::Template(resolved_template))
+        .WithDefaults(resolved_defaults)
+        .WithDescription(resolved_description)
+        .WithLanguage(resolved_language)
         .WithRevisionComment(args->revision_comment);
-    for (const auto& tag : args->tags) {
-      builder.WithTag(tag);
+    if (tags_option->count() > 0 || !existing.has_value()) {
+      for (const auto& tag : args->tags) {
+        builder.WithTag(tag);
+      }
+    } else {
+      for (const auto& tag : existing->tags()) {
+        builder.WithTag(tag);
+      }
     }
 
     auto& engine = state.EnsureEngine();
-    tf::Result<tf::PublishedBlock> result =
-        args->version.empty()
-            ? (update ? engine.UpdateBlock(std::move(builder).build())
-                      : engine.PublishBlock(std::move(builder).build()))
-            : [&]() {
-                auto version = ParseVersion(args->version);
-                if (version.HasError()) {
-                  return tf::Result<tf::PublishedBlock>(version.error());
-                }
-                if (update) {
-                  return engine.UpdateBlock(std::move(builder).build(),
-                                            tf::Engine::VersionBump::Minor);
-                }
-                return engine.PublishBlock(std::move(builder).build(),
-                                            version.value());
-              }();
+    tf::Result<tf::PublishedBlock> result = [&]() {
+      if (update) {
+        const auto bump = args->bump == "major"
+                              ? tf::Engine::VersionBump::Major
+                              : tf::Engine::VersionBump::Minor;
+        return engine.UpdateBlock(std::move(builder).build(), bump);
+      }
+      if (args->version.empty()) {
+        return engine.PublishBlock(std::move(builder).build());
+      }
+      auto version = ParseVersion(args->version);
+      if (version.HasError()) {
+        return tf::Result<tf::PublishedBlock>(version.error());
+      }
+      return engine.PublishBlock(std::move(builder).build(), version.value());
+    }();
     if (result.HasError()) {
       state.Fail(result.error());
       return;
@@ -344,10 +415,11 @@ void AddCompositionCommands(CLI::App& app, AppState& state) {
         state.Fail(dto.error());
         return;
       }
+      // Per spec: only `fragments` is read from the JSON body. id and
+      // description always come from the CLI args, even when --desc was
+      // not passed, so there is exactly one place naming the composition.
       dto.value().id = create_args->id;
-      if (!create_args->description.empty()) {
-        dto.value().description = create_args->description;
-      }
+      dto.value().description = create_args->description;
       publish_draft(ToCompositionDraft(dto.value(), state.config.project_key));
       return;
     } else {
@@ -507,12 +579,17 @@ void AddValidateCommand(CLI::App& app, AppState& state) {
       ->check(CLI::IsMember({"block", "composition"}));
   command->add_option("id", args->id)->required();
   command->callback([&state, args] {
+    // A completed validation check is a success for this command even when
+    // the entity turns out invalid: the JSON body is a ValidationView, not
+    // the {"error":...} shape the CLI's error contract promises, so the
+    // exit code must not claim a command failure either -- callers read
+    // `valid`/`message` (or the table's "valid" column), not the exit
+    // code, to learn the outcome.
     const auto error = args->kind == "block"
                            ? state.EnsureEngine().ValidateBlock(args->id)
                            : state.EnsureEngine().ValidateComposition(args->id);
     if (error.is_error()) {
       state.Emit(ValidationView{args->kind, args->id, false, error.message});
-      state.result_code = 1;
       return;
     }
     state.Emit(ValidationView{args->kind, args->id, true, "valid"});
@@ -536,27 +613,6 @@ void AddCompletionCommand(CLI::App& app, AppState& state) {
       return;
     }
     state.output << GenerateCompletion(*parsed) << std::flush;
-  });
-}
-
-void AddDynamicCompletionCommand(CLI::App& app, AppState& state) {
-  auto* command = app.add_subcommand(
-      "__complete", "Internal dynamic shell completion query");
-  command->fallthrough();
-
-  auto kind = std::make_shared<std::string>();
-  auto prefix = std::make_shared<std::string>();
-  command->add_option("kind", *kind, "block or composition")
-      ->required()
-      ->check(CLI::IsMember({"block", "composition"}));
-  command->add_option("prefix", *prefix, "ID prefix")->default_val("");
-  command->callback([&state, kind, prefix] {
-    tf::Logger::SetLevel(tf::LogLevel::Error);
-    auto candidates = *kind == "block"
-                          ? state.EnsureEngine().ListBlocks()
-                          : state.EnsureEngine().ListCompositions();
-    state.EmitCompletionCandidates(
-        FilterCompletionCandidates(std::move(candidates), *prefix));
   });
 }
 
@@ -589,31 +645,16 @@ void AppState::Emit(const ValidationView& view) {
   PrintResult(view, config.json, output);
 }
 
-void AppState::EmitCompletionCandidates(std::vector<std::string> candidates) {
-  if (config.json) {
-    PrintResult(IdListView{"completion_candidates", std::move(candidates)},
-                true, output);
-    return;
-  }
-  for (const auto& candidate : candidates) {
-    output << candidate << '\n';
-  }
-}
-
 void AppState::Fail(const tf::Error& error) {
   result_code = PrintError(error, config.json, output, errors);
 }
 
-void RegisterCommands(CLI::App& app, AppState& state,
-                      bool include_dynamic_completion) {
+void RegisterCommands(CLI::App& app, AppState& state) {
   AddBlockCommands(app, state);
   AddCompositionCommands(app, state);
   AddRenderCommand(app, state);
   AddValidateCommand(app, state);
   AddCompletionCommand(app, state);
-  if (include_dynamic_completion) {
-    AddDynamicCompletionCommand(app, state);
-  }
 }
 
 }  // namespace cli

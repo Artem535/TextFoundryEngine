@@ -118,55 +118,31 @@ tf::Result<tf::Conditional> ToConditional(
   return tf::Result<tf::Conditional>(std::move(conditional));
 }
 
-tf::Error AppendDraftFragment(tf::CompositionDraftBuilder& builder,
-                              const FragmentDto& dto) {
-  if (dto.kind == "block_ref") {
-    if (!dto.block_ref.has_value() || !dto.block_ref->version.has_value()) {
-      return tf::Error::VersionRequired();
-    }
-    auto version = ParseVersionImpl(*dto.block_ref->version);
-    if (version.HasError()) {
-      return version.error();
-    }
-    builder.AddBlockRef(dto.block_ref->block_id, version.value().major,
-                        version.value().minor, dto.block_ref->params);
-    return tf::Error::success();
+// Appends an already-converted, already-validated domain Fragment to a
+// draft builder. This is the only place a converted Fragment is unpacked
+// back into CompositionDraftBuilder's typed Add* calls, so ToCompositionDraft
+// shares exactly the same conversion (ToFragment, below) that ToComposition
+// and the DTO tests use -- there is no second, divergent JSON->domain path
+// that could enforce the tagged-union invariant differently or accept
+// shapes (e.g. a block_ref with no version, meaning "use latest") that the
+// other path rejects.
+tf::Error AppendFragmentToDraft(tf::CompositionDraftBuilder& builder,
+                                tf::Fragment fragment) {
+  switch (fragment.type()) {
+    case tf::FragmentType::BlockRef:
+      builder.AddBlockRef(std::move(fragment.AsBlockRef()));
+      return tf::Error::success();
+    case tf::FragmentType::StaticText:
+      builder.AddStaticText(std::move(fragment.AsStaticText().content));
+      return tf::Error::success();
+    case tf::FragmentType::Separator:
+      builder.AddSeparator(fragment.AsSeparator().type);
+      return tf::Error::success();
+    case tf::FragmentType::Conditional:
+      builder.AddConditional(std::move(fragment.AsConditional()));
+      return tf::Error::success();
   }
-
-  if (dto.kind == "static_text") {
-    if (!dto.static_text.has_value()) {
-      return InvalidDto("Fragment kind static_text requires static_text payload");
-    }
-    builder.AddStaticText(dto.static_text->text);
-    return tf::Error::success();
-  }
-
-  if (dto.kind == "separator") {
-    if (!dto.separator.has_value()) {
-      return InvalidDto("Fragment kind separator requires separator payload");
-    }
-    auto separator = ParseSeparator(dto.separator->separator_type);
-    if (separator.HasError()) {
-      return separator.error();
-    }
-    builder.AddSeparator(separator.value());
-    return tf::Error::success();
-  }
-
-  if (dto.kind == "conditional") {
-    if (!dto.conditional.has_value()) {
-      return InvalidDto(
-          "Fragment kind conditional requires conditional payload");
-    }
-    auto conditional = ToConditional(*dto.conditional, false);
-    if (conditional.HasError()) {
-      return conditional.error();
-    }
-    builder.AddConditional(std::move(conditional.value()));
-    return tf::Error::success();
-  }
-
-  return InvalidDto("Unknown fragment kind: " + dto.kind);
+  return InvalidDto("Unknown fragment type");
 }
 
 }  // namespace
@@ -278,8 +254,13 @@ tf::Result<tf::CompositionDraft> ToCompositionDraft(
     builder.WithDescription(*dto.description);
   }
 
-  for (const auto& fragment : dto.fragments) {
-    const auto error = AppendDraftFragment(builder, fragment);
+  for (const auto& fragment_dto : dto.fragments) {
+    auto fragment = ToFragment(fragment_dto, /*is_draft_context=*/true);
+    if (fragment.HasError()) {
+      return tf::Result<tf::CompositionDraft>(fragment.error());
+    }
+    const auto error =
+        AppendFragmentToDraft(builder, std::move(fragment.value()));
     if (error.is_error()) {
       return tf::Result<tf::CompositionDraft>(error);
     }

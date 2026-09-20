@@ -1,6 +1,5 @@
 #include "completion.h"
 
-#include <algorithm>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -50,36 +49,6 @@ std::string GenerateBash() {
          << "    COMPREPLY=( $(compgen -f -- \"$cur\") )\n"
          << "    return\n"
          << "  fi\n"
-         << "  local root_index=1\n"
-         << "  local i=1\n"
-         << "  while (( i < COMP_CWORD )); do\n"
-         << "    case \"${COMP_WORDS[i]}\" in\n"
-         << "      --data|-d|--project|-P) (( i += 2 )) ;;\n"
-         << "      --strict|--json) (( i++ )) ;;\n"
-         << "      block|b|comp|composition|render|validate) root_index=$i; break ;;\n"
-         << "      *) (( i++ )) ;;\n"
-         << "    esac\n"
-         << "  done\n"
-         << "  local relative_index=$((COMP_CWORD-root_index))\n"
-         << "  if [[ $relative_index -eq 2 ]]; then\n"
-         << "    local query_kind=\"\"\n"
-         << "    case \"${COMP_WORDS[root_index]}:${COMP_WORDS[root_index+1]}\" in\n"
-         << "      block:inspect|block:deprecate|b:inspect|b:deprecate) query_kind=block ;;\n"
-         << "      comp:inspect|comp:deprecate|composition:inspect|composition:deprecate) query_kind=composition ;;\n"
-         << "      render:block|validate:block) query_kind=block ;;\n"
-         << "      render:composition|validate:composition) query_kind=composition ;;\n"
-         << "    esac\n"
-         << "    if [[ -n \"$query_kind\" ]]; then\n"
-         << "      local -a query_args=()\n"
-         << "      for (( i=1; i<COMP_CWORD; i++ )); do\n"
-         << "        case \"${COMP_WORDS[i]}\" in\n"
-         << "          --data|-d|--project|-P) query_args+=(\"${COMP_WORDS[i]}\" \"${COMP_WORDS[i+1]}\"); (( i++ )) ;;\n"
-         << "        esac\n"
-         << "      done\n"
-         << "      COMPREPLY=( $(tfe \"${query_args[@]}\" __complete \"$query_kind\" \"$cur\" 2>/dev/null) )\n"
-         << "      return\n"
-         << "    fi\n"
-         << "  fi\n"
          << "  local words=\"" << commands << " " << options << "\"\n"
          << "  if [[ " "$" "{COMP_CWORD} -eq 1 ]]; then\n"
          << "    COMPREPLY=( $(compgen -W \"" << commands
@@ -95,29 +64,10 @@ std::string GenerateBash() {
 std::string GenerateZsh() {
   std::ostringstream result;
   result << "#compdef tfe\n"
-         << "_tfe_complete_dynamic() {\n"
-         << "  if (( CURRENT == 4 )); then\n"
-         << "    case \"$words[2]:$words[3]\" in\n"
-         << "      block:inspect|block:deprecate|b:inspect|b:deprecate)\n"
-         << "        local -a ids=(\"${(@f)$(tfe __complete block \"$words[CURRENT]\" 2>/dev/null)}\")\n"
-         << "        _describe 'block id' ids; return ;;\n"
-         << "      comp:inspect|comp:deprecate|composition:inspect|composition:deprecate)\n"
-         << "        local -a ids=(\"${(@f)$(tfe __complete composition \"$words[CURRENT]\" 2>/dev/null)}\")\n"
-         << "        _describe 'composition id' ids; return ;;\n"
-         << "      render:block|validate:block)\n"
-         << "        local -a ids=(\"${(@f)$(tfe __complete block \"$words[CURRENT]\" 2>/dev/null)}\")\n"
-         << "        _describe 'block id' ids; return ;;\n"
-         << "      render:composition|validate:composition)\n"
-         << "        local -a ids=(\"${(@f)$(tfe __complete composition \"$words[CURRENT]\" 2>/dev/null)}\")\n"
-         << "        _describe 'composition id' ids; return ;;\n"
-         << "    esac\n"
-         << "  fi\n"
-         << "  _arguments '1:command:(" << RootCommandNames() << ")' "
+         << "_arguments '1:command:(" << RootCommandNames() << ")' "
          << "'--data[Engine data path]:path:_files' "
          << "'--from-json[JSON input]:file:_files' "
-         << "'*:option:(" << GlobalOptionNames() << ")'\n"
-         << "}\n"
-         << "compdef _tfe_complete_dynamic tfe\n";
+         << "'*:option:(" << GlobalOptionNames() << ")'\n";
   return result.str();
 }
 
@@ -139,10 +89,6 @@ std::string GenerateFish() {
     }
     result << "\n";
   }
-  result << "complete -c tfe -f -n '__fish_seen_subcommand_from block b; __fish_seen_subcommand_from inspect deprecate' -a '(tfe __complete block (commandline -ct) 2>/dev/null)'\n"
-         << "complete -c tfe -f -n '__fish_seen_subcommand_from comp composition; __fish_seen_subcommand_from inspect deprecate' -a '(tfe __complete composition (commandline -ct) 2>/dev/null)'\n"
-         << "complete -c tfe -f -n '__fish_seen_subcommand_from render validate; __fish_seen_subcommand_from block' -a '(tfe __complete block (commandline -ct) 2>/dev/null)'\n"
-         << "complete -c tfe -f -n '__fish_seen_subcommand_from render validate; __fish_seen_subcommand_from composition' -a '(tfe __complete composition (commandline -ct) 2>/dev/null)'\n";
   result << "complete -c tfe -l data -r -F\n"
          << "complete -c tfe -l from-json -r -F\n";
   return result.str();
@@ -169,21 +115,6 @@ std::optional<Shell> TryParseShell(std::string_view name) noexcept {
     return std::nullopt;
   }
   return shell;
-}
-
-std::vector<std::string> FilterCompletionCandidates(
-    std::vector<std::string> candidates, std::string_view prefix) {
-  std::sort(candidates.begin(), candidates.end());
-  candidates.erase(std::unique(candidates.begin(), candidates.end()),
-                   candidates.end());
-  candidates.erase(
-      std::remove_if(candidates.begin(), candidates.end(),
-                     [prefix](const std::string& candidate) {
-                       return candidate.size() < prefix.size() ||
-                              candidate.compare(0, prefix.size(), prefix) != 0;
-                     }),
-      candidates.end());
-  return candidates;
 }
 
 std::string GenerateCompletion(Shell shell) {

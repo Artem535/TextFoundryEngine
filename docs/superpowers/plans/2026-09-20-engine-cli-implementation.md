@@ -8,7 +8,7 @@
 
 **Tech Stack:** C++23, CMake, vcpkg manifest mode, CLI11 2.x, FTXUI 7.x (`ftxui::dom`, `ftxui::screen`), reflect-cpp, doctest, existing TextFoundryEngine/ObjectBox store APIs.
 
-**Status:** Implemented inline in this worktree. Fresh verification passes with `tfe`, `cli_tests`, `core_tests`, and `tfe_smoke`; the ObjectBox-disabled configuration also builds the core and skips `tfe` as designed.
+**Status:** Implemented inline in this worktree, then reworked after an independent review found the initial pass had real defects: `tfe` was missing the ObjectBox `BUILD_RPATH` that `core_tests`/`cli_tests` already carry (the binary could not load `libobjectbox.so`), `vcpkg.json` pinned `ftxui` to a version absent from this project's vcpkg baseline (fixed by bumping the baseline, not the version, to keep FTXUI on vcpkg as decided), `comp create --from-json`'s production conversion path diverged from the one the DTO tests actually exercised (unified onto a single path), `block publish` silently ignored `--version` and forced a full template re-type (replaced with a real `--bump {major,minor}` flag and inherit-unset-fields-from-the-published-block behavior), and dynamic shell-completion (`__complete`) had filesystem side effects on every keystroke and was reverted to the static, catalog-driven completion this plan originally scoped for the first release. Fresh verification passes with `tfe`, `cli_tests` (22 cases, 113 assertions), `core_tests`, and `tfe_smoke`; the ObjectBox-disabled configuration also builds the core and skips `tfe` as designed.
 
 ## Global Constraints
 

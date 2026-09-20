@@ -26,4 +26,11 @@ target_link_libraries(tfe
         reflectcpp::reflectcpp
 )
 
+if(UNIX AND TARGET objectbox)
+    set_property(TARGET tfe PROPERTY BUILD_WITH_INSTALL_RPATH OFF)
+    set_property(TARGET tfe APPEND PROPERTY
+        BUILD_RPATH "$<TARGET_FILE_DIR:objectbox>"
+    )
+endif()
+
 install(TARGETS tfe RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

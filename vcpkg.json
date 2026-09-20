@@ -1,7 +1,7 @@
 {
   "name": "textfoundry-engine",
   "version": "0.1.0",
-  "builtin-baseline": "aa2d37682e3318d93aef87efa7b0e88e81cd3d59",
+  "builtin-baseline": "06da45aa49a5f988586cec6cf28eb1233ffca2af",
   "dependencies": [
     {
       "name": "cli11",

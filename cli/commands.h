@@ -24,11 +24,9 @@ struct AppState {
   void Emit(const EntityView& view);
   void Emit(const RenderView& view);
   void Emit(const ValidationView& view);
-  void EmitCompletionCandidates(std::vector<std::string> candidates);
   void Fail(const tf::Error& error);
 };
 
-void RegisterCommands(CLI::App& app, AppState& state,
-                      bool include_dynamic_completion = false);
+void RegisterCommands(CLI::App& app, AppState& state);
 
 }  // namespace cli
