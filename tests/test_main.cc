@@ -389,6 +389,40 @@ TEST_SUITE("CompositionNormalization") {
     REQUIRE(result.HasError());
     CHECK(result.error().code == ErrorCode::InvalidParamType);
   }
+
+  TEST_CASE(
+      "NormalizeComposition rejects Conditional content, consistent with "
+      "PreviewNormalizeComposition") {
+    EngineTestFixture fixture;
+
+    auto cond = ConditionalBuilder()
+                    .If(Condition{.attribute = "level",
+                                  .allowedValues = {"expert"}})
+                    .Then(Fragment::MakeStaticText("expert text"))
+                    .Else(Fragment::MakeStaticText("default text"))
+                    .build();
+
+    CompositionDraftBuilder composition_builder("prompt.cond");
+    composition_builder.AddConditional(std::move(cond));
+    auto composition = fixture.engine.PublishComposition(
+        composition_builder.build(), Version{1, 0});
+    REQUIRE(composition.HasValue());
+
+    fixture.engine.SetBlockNormalizer(std::make_shared<FakeBlockNormalizer>(
+        Result<NormalizedBlockData>(NormalizedBlockData{
+            .templ = "unused",
+            .description = std::nullopt,
+            .language = std::nullopt,
+        })));
+
+    auto result = fixture.engine.NormalizeComposition(
+        CompositionNormalizationRequest{
+            .source_composition_id = "prompt.cond",
+            .style = SemanticStyle{.tone = std::string("warm")},
+        });
+    REQUIRE(result.HasError());
+    CHECK(result.error().code == ErrorCode::InvalidParamType);
+  }
 }
 
 // ==================== BlockType Tests ====================

@@ -1102,11 +1102,16 @@ Result<NormalizedCompositionResult> Engine::NormalizeComposition(
     }
 
     if (fragment.IsConditional()) {
-      // Normalization doesn't recurse into Conditional branches yet --
-      // pass the whole subtree through unchanged rather than dropping it
-      // or normalizing only part of it.
-      builder.AddConditional(fragment.AsConditional());
-      continue;
+      // Normalization doesn't recurse into Conditional branches yet.
+      // Reject rather than silently passing the subtree through --
+      // PreviewNormalizeComposition (both paths) already refuses
+      // Conditional content, and a derivative that passed it through
+      // unchanged would make a later preview of that same derivative
+      // fail on the apply's own valid output.
+      return Result<NormalizedCompositionResult>(
+          Error{ErrorCode::InvalidParamType,
+                "Normalization does not yet support compositions "
+                "containing Conditional content"});
     }
 
     const auto& block_ref = fragment.AsBlockRef();
