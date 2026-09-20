@@ -23,6 +23,36 @@ TEST_CASE("tfe help is a successful CLI11 result") {
 
   CHECK(result == 0);
   CHECK(output.str().find("tfe") != std::string::npos);
+  CHECK(output.str().find("Aliases:") != std::string::npos);
+  CHECK(output.str().find("Examples:") != std::string::npos);
+  CHECK(output.str().find("tfe block create") != std::string::npos);
+  CHECK(errors.str().empty());
+}
+
+TEST_CASE("tfe accepts stable root command aliases") {
+  std::ostringstream output;
+  std::ostringstream errors;
+
+  const auto result = Run({"tfe", "--data", "memory:cli_alias_block", "b",
+                           "list", "--json"},
+                          output, errors);
+
+  CHECK(result == 0);
+  CHECK(output.str().find("\"kind\":\"blocks\"") != std::string::npos);
+  CHECK(errors.str().empty());
+}
+
+TEST_CASE("tfe accepts the long composition alias") {
+  std::ostringstream output;
+  std::ostringstream errors;
+
+  const auto result = Run({"tfe", "--data", "memory:cli_alias_composition",
+                           "composition", "list", "--json"},
+                          output, errors);
+
+  CHECK(result == 0);
+  CHECK(output.str().find("\"kind\":\"compositions\"") !=
+        std::string::npos);
   CHECK(errors.str().empty());
 }
 

@@ -52,6 +52,10 @@ tfe --data .tfe-data block create greeting \
 tfe --data .tfe-data comp create welcome --block greeting@1.0
 tfe --data .tfe-data render composition welcome --json
 
+# Short aliases: `b` is `block`, and `composition` is `comp`.
+tfe --data .tfe-data b list --json
+tfe --data .tfe-data composition list --json
+
 # Full nested compositions can be authored through --from-json or stdin.
 tfe --data .tfe-data comp create welcome --from-json composition.json --json
 
@@ -62,7 +66,8 @@ tfe completion fish > ~/.config/fish/completions/tfe.fish
 ```
 
 The CLI returns `0` on success, `1` for an engine/domain error, and `2` for a
-CLI usage error. The current release intentionally does not include an
+CLI usage error. In JSON mode, failures use the stable shape
+`{"error":{"code":"<ErrorCode name>","message":"<text>"}}`. The current release intentionally does not include an
 interactive TUI; FTXUI Component is reserved for a later `tfe tui` layer.
 
 ## Using it via FetchContent

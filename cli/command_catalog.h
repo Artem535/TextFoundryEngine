@@ -20,9 +20,12 @@ struct CommandSpec {
   std::string description;
   std::vector<CommandSpec> subcommands;
   std::vector<OptionSpec> options;
+  std::vector<std::string> aliases;
+  std::vector<std::string> examples;
 };
 
 [[nodiscard]] const std::vector<OptionSpec>& GlobalOptions();
 [[nodiscard]] const std::vector<CommandSpec>& RootCommands();
+[[nodiscard]] std::string RootHelpFooter();
 
 }  // namespace cli

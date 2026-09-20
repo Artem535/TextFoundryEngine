@@ -24,12 +24,11 @@ TEST_CASE("CLI views render as JSON and an FTXUI table") {
 }
 
 TEST_CASE("CLI errors use the nested JSON error shape") {
-  const tf::Error error = tf::Error::BlockNotFound("missing");
+  const tf::Error error{tf::ErrorCode::InvalidParamType, "bad input"};
 
   const auto json = cli::ErrorJson(error);
-  CHECK(json.find("\"error\"") != std::string::npos);
-  CHECK(json.find("BlockNotFound") != std::string::npos);
-  CHECK(json.find("missing") != std::string::npos);
+  CHECK(json ==
+        R"({"error":{"code":"InvalidParamType","message":"bad input"}})");
 
   std::ostringstream stdout_stream;
   std::ostringstream stderr_stream;

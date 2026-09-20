@@ -64,7 +64,8 @@ int RunApplication(int argc, char** argv, std::ostream& output,
   app.add_flag(OptionFlags(FindGlobalOption("strict")), state.config.strict,
                 "Fail rendering on missing parameters");
   app.add_flag(OptionFlags(FindGlobalOption("json")), state.config.json,
-                "Print JSON instead of a table");
+               "Print JSON instead of a table");
+  app.footer(RootHelpFooter());
   app.fallthrough();
   RegisterCommands(app, state);
 

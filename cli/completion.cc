@@ -18,6 +18,9 @@ std::string RootCommandNames() {
     }
     first = false;
     result << command.name;
+    for (const auto& alias : command.aliases) {
+      result << ' ' << alias;
+    }
   }
   return result.str();
 }
@@ -74,6 +77,10 @@ std::string GenerateFish() {
   for (const auto& command : RootCommands()) {
     result << "complete -c tfe -f -n \"__fish_use_subcommand\" -a \""
            << command.name << "\" -d \"" << command.description << "\"\n";
+    for (const auto& alias : command.aliases) {
+      result << "complete -c tfe -f -n \"__fish_use_subcommand\" -a \""
+             << alias << "\" -d \"" << command.description << "\"\n";
+    }
   }
   for (const auto& option : GlobalOptions()) {
     result << "complete -c tfe -l " << option.long_name;

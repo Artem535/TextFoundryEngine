@@ -155,6 +155,11 @@ generate shell completion scripts. `cli/command_catalog.*` therefore defines
 the root commands, subcommands, aliases, and options once, while
 `cli/completion.*` renders that catalog for Bash, Zsh, and Fish.
 
+The stable root aliases are `b` for `block` and `composition` for `comp`.
+The root help footer is also generated from this catalog and contains the
+aliases plus representative examples, so help text and completion do not
+drift apart.
+
 `tfe completion <shell>` writes only the generated script to stdout. The first
 version completes command names, fixed choices, and JSON file paths. It does
 not open the ObjectBox store or complete dynamic block/composition IDs; that

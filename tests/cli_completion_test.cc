@@ -30,7 +30,9 @@ TEST_CASE("shell completion contains commands and global options") {
 
   for (const auto* script : {&bash, &zsh, &fish}) {
     CHECK(script->find("block") != std::string::npos);
+    CHECK(script->find(" b") != std::string::npos);
     CHECK(script->find("comp") != std::string::npos);
+    CHECK(script->find("composition") != std::string::npos);
     CHECK(script->find("completion") != std::string::npos);
     CHECK(script->find("json") != std::string::npos);
     CHECK(script->find("project") != std::string::npos);

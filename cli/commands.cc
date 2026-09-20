@@ -77,6 +77,12 @@ const CommandSpec& FindSubcommand(const CommandSpec& parent,
                          std::string(name));
 }
 
+void ApplyAliases(CLI::App& command, const CommandSpec& spec) {
+  for (const auto& alias : spec.aliases) {
+    command.alias(alias);
+  }
+}
+
 tf::Result<tf::Params> ParseParams(const std::vector<std::string>& values) {
   tf::Params params;
   for (const auto& value : values) {
@@ -226,6 +232,7 @@ void AddBlockWriteCommand(CLI::App& parent, AppState& state,
 void AddBlockCommands(CLI::App& app, AppState& state) {
   const auto& spec = FindRootCommand("block");
   auto* command = app.add_subcommand(spec.name, spec.description);
+  ApplyAliases(*command, spec);
   command->fallthrough();
 
   AddBlockWriteCommand(*command, state, "create", false);
@@ -292,6 +299,7 @@ void AddBlockCommands(CLI::App& app, AppState& state) {
 void AddCompositionCommands(CLI::App& app, AppState& state) {
   const auto& spec = FindRootCommand("comp");
   auto* command = app.add_subcommand(spec.name, spec.description);
+  ApplyAliases(*command, spec);
   command->fallthrough();
 
   auto create_args = std::make_shared<CompositionCreateArgs>();
@@ -423,6 +431,7 @@ void AddCompositionCommands(CLI::App& app, AppState& state) {
 void AddRenderCommand(CLI::App& app, AppState& state) {
   const auto& spec = FindRootCommand("render");
   auto* command = app.add_subcommand(spec.name, spec.description);
+  ApplyAliases(*command, spec);
   command->fallthrough();
   auto args = std::make_shared<RenderArgs>();
   command->add_option("kind", args->kind, "block or composition")
@@ -488,6 +497,7 @@ void AddRenderCommand(CLI::App& app, AppState& state) {
 void AddValidateCommand(CLI::App& app, AppState& state) {
   const auto& spec = FindRootCommand("validate");
   auto* command = app.add_subcommand(spec.name, spec.description);
+  ApplyAliases(*command, spec);
   command->fallthrough();
   auto args = std::make_shared<RenderArgs>();
   command->add_option("kind", args->kind, "block or composition")
@@ -510,6 +520,7 @@ void AddValidateCommand(CLI::App& app, AppState& state) {
 void AddCompletionCommand(CLI::App& app, AppState& state) {
   const auto& spec = FindRootCommand("completion");
   auto* command = app.add_subcommand(spec.name, spec.description);
+  ApplyAliases(*command, spec);
   command->fallthrough();
   auto shell = std::make_shared<std::string>();
   command->add_option("shell", *shell, "bash, zsh, or fish")
