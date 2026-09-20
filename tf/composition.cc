@@ -242,6 +242,13 @@ CompositionDraftBuilder& CompositionDraftBuilder::AddSeparator(
   return *this;
 }
 
+CompositionDraftBuilder& CompositionDraftBuilder::AddConditional(
+    Conditional cond) {
+  comp_.InsertFragment(comp_.fragmentCount(),
+                       Fragment::MakeConditional(std::move(cond)));
+  return *this;
+}
+
 CompositionDraft CompositionDraftBuilder::build() {
   return CompositionDraft(std::move(comp_));
 }

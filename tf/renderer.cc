@@ -47,8 +47,11 @@ Result<RenderResult> Renderer::Render(const Composition& composition,
   std::vector<std::string> fragmentTexts;
   std::vector<std::pair<BlockId, Version>> blocksUsed;
 
-  TF_LOG_TRACE("Rendering {} fragments", composition.fragments().size());
-  for (const auto& fragment : composition.fragments()) {
+  auto resolvedFragments =
+      ResolveConditionals(composition.fragments(), context.params);
+
+  TF_LOG_TRACE("Rendering {} fragments", resolvedFragments.size());
+  for (const auto& fragment : resolvedFragments) {
     auto result = RenderFragment(fragment, context, blocksUsed);
     if (result.HasError()) {
       TF_LOG_ERROR("Failed to render fragment: {}", result.error().message);
@@ -185,6 +188,49 @@ StructuralStyle Renderer::GetEffectiveStyle(const Composition& composition) {
     return composition.GetStyleProfile()->structural;
   }
   return {};
+}
+
+std::vector<Fragment> Renderer::ResolveConditionals(
+    const std::vector<Fragment>& fragments, const Params& params) {
+  std::vector<Fragment> resolved;
+  resolved.reserve(fragments.size());
+
+  for (const auto& fragment : fragments) {
+    if (!fragment.IsConditional()) {
+      resolved.push_back(fragment);
+      continue;
+    }
+
+    const Conditional& cond = fragment.AsConditional();
+    const std::vector<Fragment>* selected = nullptr;
+
+    for (const auto& branch : cond.branches) {
+      bool allMatch = true;
+      for (const auto& condition : branch.conditions) {
+        if (!condition.matches(params)) {
+          allMatch = false;
+          break;
+        }
+      }
+      if (allMatch) {
+        selected = &branch.content;
+        break;
+      }
+    }
+
+    if (selected == nullptr) {
+      // validate() guarantees elseContent is set for any published
+      // Composition; Render() only ever operates on Published input.
+      selected = &(*cond.elseContent);
+    }
+
+    auto branchResolved = ResolveConditionals(*selected, params);
+    resolved.insert(resolved.end(),
+                    std::make_move_iterator(branchResolved.begin()),
+                    std::make_move_iterator(branchResolved.end()));
+  }
+
+  return resolved;
 }
 
 }  // namespace tf

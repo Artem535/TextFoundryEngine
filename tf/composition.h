@@ -269,6 +269,8 @@ class CompositionDraftBuilder {
 
   CompositionDraftBuilder& AddSeparator(SeparatorType type);
 
+  CompositionDraftBuilder& AddConditional(Conditional cond);
+
   [[nodiscard]] CompositionDraft build();
 
  private:

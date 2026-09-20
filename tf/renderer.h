@@ -133,6 +133,17 @@ class Renderer {
    */
   [[nodiscard]] static StructuralStyle GetEffectiveStyle(
       const Composition& composition);
+
+  /**
+   * Pure pre-pass: recursively expands every Conditional fragment into its
+   * selected branch's content (first branch whose conditions all match,
+   * else elseContent), returning a flat fragment list containing only
+   * BlockRef / StaticText / Separator. Nested Conditionals inside a
+   * selected branch are resolved recursively. Does not touch IBlockCache
+   * and has no side effects.
+   */
+  [[nodiscard]] static std::vector<Fragment> ResolveConditionals(
+      const std::vector<Fragment>& fragments, const Params& params);
 };
 
 }  // namespace tf

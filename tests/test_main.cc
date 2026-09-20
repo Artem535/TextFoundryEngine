@@ -705,6 +705,135 @@ TEST_SUITE("Conditional") {
   }
 }
 
+TEST_SUITE("ConditionalRendering") {
+  TEST_CASE_FIXTURE(EngineTestFixture, "first matching branch wins among 3+ branches") {
+    createAndPublishBlock("cond.expert", "expert content");
+    createAndPublishBlock("cond.intermediate", "intermediate content");
+    createAndPublishBlock("cond.beginner", "beginner content");
+
+    CompositionDraftBuilder builder("cond.elif_chain");
+    Conditional cond;
+    cond.branches.push_back(Branch{
+        .conditions = {Condition{.attribute = "level", .allowedValues = {"expert"}}},
+        .content = {Fragment::MakeBlockRef(BlockRef("cond.expert", Version{1, 0}))}});
+    cond.branches.push_back(Branch{
+        .conditions = {Condition{.attribute = "level", .allowedValues = {"intermediate"}}},
+        .content = {Fragment::MakeBlockRef(BlockRef("cond.intermediate", Version{1, 0}))}});
+    cond.elseContent = std::vector<Fragment>{
+        Fragment::MakeBlockRef(BlockRef("cond.beginner", Version{1, 0}))};
+    builder.AddConditional(std::move(cond));
+    auto pubResult = engine.PublishComposition(builder.build(), Engine::VersionBump::Minor);
+    REQUIRE(pubResult.HasValue());
+
+    auto ctx = RenderContext{}.WithParam("level", "intermediate");
+    auto result = engine.Render("cond.elif_chain", ctx);
+    REQUIRE(result.HasValue());
+    CHECK(result.value().text == "intermediate content");
+  }
+
+  TEST_CASE_FIXTURE(EngineTestFixture, "falls through to else when no branch matches") {
+    createAndPublishBlock("cond.a", "a content");
+
+    CompositionDraftBuilder builder("cond.fallthrough");
+    Conditional cond;
+    cond.branches.push_back(Branch{
+        .conditions = {Condition{.attribute = "level", .allowedValues = {"expert"}}},
+        .content = {Fragment::MakeBlockRef(BlockRef("cond.a", Version{1, 0}))}});
+    cond.elseContent = std::vector<Fragment>{Fragment::MakeStaticText("default text")};
+    builder.AddConditional(std::move(cond));
+    auto pubResult = engine.PublishComposition(builder.build(), Engine::VersionBump::Minor);
+    REQUIRE(pubResult.HasValue());
+
+    auto ctx = RenderContext{}.WithParam("level", "unknown");
+    auto result = engine.Render("cond.fallthrough", ctx);
+    REQUIRE(result.HasValue());
+    CHECK(result.value().text == "default text");
+  }
+
+  TEST_CASE_FIXTURE(EngineTestFixture, "a branch with multiple conditions requires all to match (AND)") {
+    CompositionDraftBuilder builder("cond.and_branch");
+    Conditional cond;
+    cond.branches.push_back(Branch{
+        .conditions = {Condition{.attribute = "level", .allowedValues = {"expert"}},
+                       Condition{.attribute = "platform", .allowedValues = {"linux"}}},
+        .content = {Fragment::MakeStaticText("expert linux text")}});
+    cond.elseContent = std::vector<Fragment>{Fragment::MakeStaticText("default text")};
+    builder.AddConditional(std::move(cond));
+    auto pubResult = engine.PublishComposition(builder.build(), Engine::VersionBump::Minor);
+    REQUIRE(pubResult.HasValue());
+
+    // Only one of the two conditions matches -> branch does not match -> else.
+    auto ctx = RenderContext{}.WithParam("level", "expert").WithParam("platform", "windows");
+    auto result = engine.Render("cond.and_branch", ctx);
+    REQUIRE(result.HasValue());
+    CHECK(result.value().text == "default text");
+
+    // Both conditions match -> branch matches.
+    auto ctx2 = RenderContext{}.WithParam("level", "expert").WithParam("platform", "linux");
+    auto result2 = engine.Render("cond.and_branch", ctx2);
+    REQUIRE(result2.HasValue());
+    CHECK(result2.value().text == "expert linux text");
+  }
+
+  TEST_CASE_FIXTURE(EngineTestFixture, "a single condition with multiple allowedValues matches any one (OR)") {
+    CompositionDraftBuilder builder("cond.or_values");
+    Conditional cond;
+    cond.branches.push_back(Branch{
+        .conditions = {Condition{.attribute = "platform",
+                                 .allowedValues = {"linux", "macos"}}},
+        .content = {Fragment::MakeStaticText("unix-like text")}});
+    cond.elseContent = std::vector<Fragment>{Fragment::MakeStaticText("other text")};
+    builder.AddConditional(std::move(cond));
+    auto pubResult = engine.PublishComposition(builder.build(), Engine::VersionBump::Minor);
+    REQUIRE(pubResult.HasValue());
+
+    auto ctx = RenderContext{}.WithParam("platform", "macos");
+    auto result = engine.Render("cond.or_values", ctx);
+    REQUIRE(result.HasValue());
+    CHECK(result.value().text == "unix-like text");
+  }
+
+  TEST_CASE_FIXTURE(EngineTestFixture, "a Conditional nested inside a selected branch's content is itself resolved") {
+    CompositionDraftBuilder builder("cond.nested");
+    Conditional inner;
+    inner.branches.push_back(Branch{
+        .conditions = {Condition{.attribute = "detail", .allowedValues = {"high"}}},
+        .content = {Fragment::MakeStaticText("high detail")}});
+    inner.elseContent = std::vector<Fragment>{Fragment::MakeStaticText("low detail")};
+
+    Conditional outer;
+    outer.branches.push_back(Branch{
+        .conditions = {Condition{.attribute = "level", .allowedValues = {"expert"}}},
+        .content = {Fragment::MakeConditional(std::move(inner))}});
+    outer.elseContent = std::vector<Fragment>{Fragment::MakeStaticText("beginner text")};
+    builder.AddConditional(std::move(outer));
+    auto pubResult = engine.PublishComposition(builder.build(), Engine::VersionBump::Minor);
+    REQUIRE(pubResult.HasValue());
+
+    auto ctx = RenderContext{}.WithParam("level", "expert").WithParam("detail", "high");
+    auto result = engine.Render("cond.nested", ctx);
+    REQUIRE(result.HasValue());
+    CHECK(result.value().text == "high detail");
+  }
+
+  TEST_CASE_FIXTURE(EngineTestFixture, "attribute missing from RenderContext falls through to else") {
+    CompositionDraftBuilder builder("cond.missing_attr");
+    Conditional cond;
+    cond.branches.push_back(Branch{
+        .conditions = {Condition{.attribute = "level", .allowedValues = {"expert"}}},
+        .content = {Fragment::MakeStaticText("expert text")}});
+    cond.elseContent = std::vector<Fragment>{Fragment::MakeStaticText("default text")};
+    builder.AddConditional(std::move(cond));
+    auto pubResult = engine.PublishComposition(builder.build(), Engine::VersionBump::Minor);
+    REQUIRE(pubResult.HasValue());
+
+    // No "level" param set at all.
+    auto result = engine.Render("cond.missing_attr");
+    REQUIRE(result.HasValue());
+    CHECK(result.value().text == "default text");
+  }
+}
+
 TEST_SUITE("Fragment") {
   TEST_CASE("Fragment BlockRef type") {
     BlockRef ref("block.id", Version{1, 0});
