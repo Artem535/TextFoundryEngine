@@ -39,6 +39,9 @@ enum class ErrorCode {
   // Rendering errors
   TemplateSyntaxError,  ///< Invalid template syntax
   CircularReference,    ///< Circular dependency in blocks
+  EmptyConditional,        ///< Conditional has zero branches (only Else, or nothing at all)
+  EmptyBranchConditions,   ///< A Branch has zero Conditions (always matches -- likely a bug)
+  MissingElseBranch,       ///< Conditional::elseContent is std::nullopt
 
   // Storage errors
   StorageError,  ///< Underlying storage failure
@@ -83,6 +86,21 @@ struct Error {
   [[nodiscard]] static Error CompositionNotFound(const std::string& compId) {
     return Error{ErrorCode::CompositionNotFound,
                  "Composition not found: " + compId};
+  }
+
+  [[nodiscard]] static Error EmptyConditional() {
+    return Error{ErrorCode::EmptyConditional,
+                 "Conditional must have at least one branch"};
+  }
+
+  [[nodiscard]] static Error EmptyBranchConditions() {
+    return Error{ErrorCode::EmptyBranchConditions,
+                 "Branch must have at least one Condition"};
+  }
+
+  [[nodiscard]] static Error MissingElseBranch() {
+    return Error{ErrorCode::MissingElseBranch,
+                 "Conditional must have an explicit else branch"};
   }
 
   [[nodiscard]] static Error success() { return Error{ErrorCode::Success, ""}; }

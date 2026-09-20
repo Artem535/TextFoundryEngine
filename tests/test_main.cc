@@ -601,6 +601,110 @@ TEST_SUITE("BlockRef") {
 
 // ==================== Fragment Tests ====================
 
+TEST_SUITE("Condition") {
+  TEST_CASE("matches when value is in allowedValues") {
+    Condition c{.attribute = "audience", .allowedValues = {"expert", "advanced"}};
+    CHECK(c.matches({{"audience", "expert"}}));
+  }
+
+  TEST_CASE("does not match when value is not in allowedValues") {
+    Condition c{.attribute = "audience", .allowedValues = {"expert", "advanced"}};
+    CHECK_FALSE(c.matches({{"audience", "beginner"}}));
+  }
+
+  TEST_CASE("negate inverts a matching value") {
+    Condition c{.attribute = "audience", .allowedValues = {"expert"}, .negate = true};
+    CHECK_FALSE(c.matches({{"audience", "expert"}}));
+  }
+
+  TEST_CASE("negate inverts a non-matching value") {
+    Condition c{.attribute = "audience", .allowedValues = {"expert"}, .negate = true};
+    CHECK(c.matches({{"audience", "beginner"}}));
+  }
+
+  TEST_CASE("missing attribute never matches, even with negate") {
+    Condition c{.attribute = "audience", .allowedValues = {"expert"}};
+    CHECK_FALSE(c.matches({}));
+
+    Condition negated{.attribute = "audience", .allowedValues = {"expert"}, .negate = true};
+    CHECK_FALSE(negated.matches({}));
+  }
+}
+
+TEST_SUITE("Conditional") {
+  TEST_CASE("valid conditional passes validation") {
+    Conditional cond;
+    cond.branches.push_back(Branch{
+        .conditions = {Condition{.attribute = "audience", .allowedValues = {"expert"}}},
+        .content = {Fragment::MakeStaticText("expert text")}});
+    cond.elseContent = std::vector<Fragment>{Fragment::MakeStaticText("default text")};
+
+    CHECK(cond.validate(false).is_success());
+  }
+
+  TEST_CASE("empty branches is an error") {
+    Conditional cond;
+    cond.elseContent = std::vector<Fragment>{};
+
+    auto err = cond.validate(false);
+    CHECK(err.is_error());
+    CHECK(err.code == ErrorCode::EmptyConditional);
+  }
+
+  TEST_CASE("a branch with no conditions is an error") {
+    Conditional cond;
+    cond.branches.push_back(Branch{.conditions = {}, .content = {}});
+    cond.elseContent = std::vector<Fragment>{};
+
+    auto err = cond.validate(false);
+    CHECK(err.is_error());
+    CHECK(err.code == ErrorCode::EmptyBranchConditions);
+  }
+
+  TEST_CASE("missing else is an error") {
+    Conditional cond;
+    cond.branches.push_back(Branch{
+        .conditions = {Condition{.attribute = "x", .allowedValues = {"y"}}},
+        .content = {}});
+    // elseContent left as std::nullopt
+
+    auto err = cond.validate(false);
+    CHECK(err.is_error());
+    CHECK(err.code == ErrorCode::MissingElseBranch);
+  }
+
+  TEST_CASE("an explicitly empty else vector is valid") {
+    Conditional cond;
+    cond.branches.push_back(Branch{
+        .conditions = {Condition{.attribute = "x", .allowedValues = {"y"}}},
+        .content = {}});
+    cond.elseContent = std::vector<Fragment>{};  // deliberately empty, not nullopt
+
+    CHECK(cond.validate(false).is_success());
+  }
+
+  TEST_CASE("Fragment::validate propagates a bad Conditional's error") {
+    Conditional cond;
+    cond.elseContent = std::vector<Fragment>{};  // no branches -> EmptyConditional
+
+    Fragment f = Fragment::MakeConditional(std::move(cond));
+    auto err = f.validate(false);
+    CHECK(err.is_error());
+    CHECK(err.code == ErrorCode::EmptyConditional);
+  }
+
+  TEST_CASE("Composition::validate propagates a nested Conditional's error") {
+    Composition comp("test.conditional.invalid");
+    Conditional cond;
+    cond.elseContent = std::vector<Fragment>{};  // no branches -> EmptyConditional
+    comp.InsertFragment(0, Fragment::MakeConditional(std::move(cond)));
+
+    auto err = comp.validate();
+    CHECK(err.is_error());
+    CHECK(err.code == ErrorCode::EmptyConditional);
+  }
+}
+
 TEST_SUITE("Fragment") {
   TEST_CASE("Fragment BlockRef type") {
     BlockRef ref("block.id", Version{1, 0});

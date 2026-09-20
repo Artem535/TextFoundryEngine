@@ -5,7 +5,9 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <string>
+#include <unordered_set>
 #include <variant>
 #include <vector>
 
@@ -21,7 +23,8 @@ namespace tf {
 enum class FragmentType {
   BlockRef,    ///< Reference to a Block
   StaticText,  ///< Raw text without parameters
-  Separator    ///< Typed separator (newline, paragraph, hr)
+  Separator,   ///< Typed separator (newline, paragraph, hr)
+  Conditional  ///< if/elif/else content selection
 };
 
 /**
@@ -50,6 +53,57 @@ struct Separator {
   [[nodiscard]] std::string toString() const;
 };
 
+// Forward declaration: Branch::content and Conditional::elseContent hold
+// nested Fragments, but Fragment itself (defined below) holds a Conditional
+// inside its variant, so Fragment must be forward-declared before these.
+class Fragment;
+
+/**
+ * Condition - DITA-ditaval-style profiling filter: one attribute, a set of
+ * allowed values (OR within the set), optional negation. Multiple
+ * Conditions on the same Branch combine with AND.
+ */
+struct Condition {
+  std::string attribute;
+  std::unordered_set<std::string> allowedValues;
+  bool negate = false;
+
+  /**
+   * Evaluate against RenderContext params. A missing attribute is treated
+   * as not matching -- never an error. This check comes BEFORE negate is
+   * applied: with negate=true, a missing attribute still returns false,
+   * not true.
+   */
+  [[nodiscard]] bool matches(const Params& params) const noexcept;
+};
+
+/**
+ * Branch - one if/elif arm of a Conditional fragment. Conditions combine
+ * with AND (a branch with zero conditions is invalid, see
+ * Conditional::validate). Content is a nested fragment list, rendered in
+ * place when this branch is selected.
+ */
+struct Branch {
+  std::vector<Condition> conditions;
+  std::vector<Fragment> content;
+};
+
+/**
+ * Conditional - if/elif/.../else as a Fragment variant.
+ *
+ * At render time, branches are evaluated in order; the first branch whose
+ * conditions all match (AND) is selected and its content rendered in
+ * place. elseContent is mandatory -- std::nullopt (not an empty vector)
+ * means "no else was set" and is a validate() error. An empty vector
+ * inside the optional is a deliberate, valid "else renders nothing".
+ */
+struct Conditional {
+  std::vector<Branch> branches;
+  std::optional<std::vector<Fragment>> elseContent;
+
+  [[nodiscard]] Error validate(bool isDraftContext) const;
+};
+
 /**
  * Fragment - single element of Composition
  * Can be BlockRef, StaticText, or Separator
@@ -65,6 +119,8 @@ class Fragment {
 
   explicit Fragment(Separator separator) : data_(separator) {}
 
+  explicit Fragment(Conditional conditional) : data_(std::move(conditional)) {}
+
   // Factory methods
   [[nodiscard]] static Fragment MakeBlockRef(BlockRef ref) {
     return Fragment(std::move(ref));
@@ -78,6 +134,10 @@ class Fragment {
     return Fragment(Separator(type));
   }
 
+  [[nodiscard]] static Fragment MakeConditional(Conditional cond) {
+    return Fragment(std::move(cond));
+  }
+
   // Type checking
   [[nodiscard]] FragmentType type() const noexcept {
     return std::visit(
@@ -89,6 +149,8 @@ class Fragment {
             return FragmentType::StaticText;
           if constexpr (std::is_same_v<T, Separator>)
             return FragmentType::Separator;
+          if constexpr (std::is_same_v<T, Conditional>)
+            return FragmentType::Conditional;
           return FragmentType::StaticText;  // default
         },
         data_);
@@ -104,6 +166,10 @@ class Fragment {
 
   [[nodiscard]] bool IsSeparator() const noexcept {
     return std::holds_alternative<Separator>(data_);
+  }
+
+  [[nodiscard]] bool IsConditional() const noexcept {
+    return std::holds_alternative<Conditional>(data_);
   }
 
   // Accessors (use only after checking type)
@@ -127,6 +193,12 @@ class Fragment {
 
   [[nodiscard]] const Separator& AsSeparator() const& {
     return std::get<Separator>(data_);
+  }
+
+  [[nodiscard]] Conditional& AsConditional() & { return std::get<Conditional>(data_); }
+
+  [[nodiscard]] const Conditional& AsConditional() const& {
+    return std::get<Conditional>(data_);
   }
 
   // Safe accessors returning nullptr if wrong type
@@ -154,10 +226,18 @@ class Fragment {
     return std::get_if<Separator>(&data_);
   }
 
+  [[nodiscard]] Conditional* GetConditional() noexcept {
+    return std::get_if<Conditional>(&data_);
+  }
+
+  [[nodiscard]] const Conditional* GetConditional() const noexcept {
+    return std::get_if<Conditional>(&data_);
+  }
+
   // Validation
   [[nodiscard]] Error validate(bool isDraftContext = false) const;
 
  private:
-  std::variant<BlockRef, StaticText, Separator> data_;
+  std::variant<BlockRef, StaticText, Separator, Conditional> data_;
 };
 }  // namespace tf
