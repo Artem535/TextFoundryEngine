@@ -122,6 +122,12 @@ class ConditionalBuilder {
   ConditionalBuilder& Then(Fragment fragment);
   ConditionalBuilder& Else(Fragment fragment);
 
+  /**
+   * Consumes the builder, returning the accumulated Conditional by move.
+   * A second call returns an emptied Conditional (branches cleared,
+   * elseContent left as whatever moved-from state it was in) -- build()
+   * is meant to be called once.
+   */
   [[nodiscard]] Conditional build();
 
  private:

@@ -879,6 +879,19 @@ TEST_SUITE("ConditionalBuilder") {
                     .build();
 
     REQUIRE(cond.branches[0].content.size() == 2);
+    CHECK(cond.branches[0].content[0].AsStaticText().text() == "part1");
+    CHECK(cond.branches[0].content[1].AsStaticText().text() == "part2");
+  }
+
+  TEST_CASE("Else does not require a prior If") {
+    auto cond = ConditionalBuilder()
+                    .Else(Fragment::MakeStaticText("default"))
+                    .build();
+
+    CHECK(cond.branches.empty());
+    REQUIRE(cond.elseContent.has_value());
+    REQUIRE(cond.elseContent->size() == 1);
+    CHECK((*cond.elseContent)[0].AsStaticText().text() == "default");
   }
 
   TEST_CASE("Then before any If throws EngineException") {
