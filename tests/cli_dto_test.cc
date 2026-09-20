@@ -117,7 +117,9 @@ TEST_CASE("fragment DTO rejects a discriminator with the wrong payload") {
 
 TEST_CASE(
     "block_ref DTO with no version converts to a fragment that uses the "
-    "latest published version, both directly and through --from-json") {
+    "latest published version, and the resulting draft genuinely preserves "
+    "that -- not silently pinned to a nonexistent Version{0,0} -- verified "
+    "by publishing it through a real Engine") {
   cli::FragmentDto fragment;
   fragment.kind = "block_ref";
   fragment.block_ref = cli::BlockRefFragmentDto{"greeting", std::nullopt, {}};
@@ -130,6 +132,22 @@ TEST_CASE(
   cli::CompositionDto composition;
   composition.id = "uses.latest";
   composition.fragments.push_back(fragment);
-  const auto draft = cli::ToCompositionDraft(composition, "default");
+  auto draft = cli::ToCompositionDraft(composition, "default");
   REQUIRE(draft.HasValue());
+
+  // A composition can never be published while any block_ref floats to
+  // "latest" (Composition::publish's UseLatest guard) -- compositions
+  // always pin explicit versions. So the meaningful assertion here is not
+  // "publishing succeeds", it's that the ref's UseLatest survived
+  // ToCompositionDraft intact and is still caught by that guard: if
+  // CompositionDraftBuilder::AddBlockRef had instead silently pinned the
+  // ref to Version{0,0} (a real regression this test caught once), the
+  // guard would never fire and this composition would publish
+  // successfully while being permanently unrenderable.
+  tf::EngineConfig config;
+  config.default_data_path = "memory:cli_dto_uses_latest_rejected";
+  tf::Engine engine(std::move(config));
+  auto published = engine.PublishComposition(std::move(draft).value());
+  REQUIRE(published.HasError());
+  CHECK(published.error().code == tf::ErrorCode::VersionRequired);
 }

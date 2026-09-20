@@ -217,3 +217,119 @@ TEST_CASE(
   CHECK(output.str().find("MissingElseBranch") != std::string::npos);
   CHECK(errors.str().empty());
 }
+
+TEST_CASE(
+    "tfe validate on a nonexistent entity is a genuine command failure: "
+    "exit 1 and the documented {\"error\":...} JSON shape, not a "
+    "ValidationView with exit 0") {
+  std::ostringstream output;
+  std::ostringstream errors;
+
+  const auto result =
+      Run({"tfe", "--data", "memory:cli_validate_missing", "--json",
+          "validate", "block", "totally-missing"},
+         output, errors);
+
+  CHECK(result == 1);
+  CHECK(output.str().find("\"error\"") != std::string::npos);
+  CHECK(output.str().find("\"valid\"") == std::string::npos);
+  CHECK(errors.str().empty());
+}
+
+TEST_CASE(
+    "tfe validate on an existing, valid entity is a completed check: "
+    "exit 0 with a ValidationView, not the error contract") {
+  const auto data_path =
+      std::filesystem::temp_directory_path() / "tfe_validate_valid_test";
+  std::filesystem::remove_all(data_path);
+
+  std::ostringstream create_output;
+  std::ostringstream create_errors;
+  const auto create_result =
+      Run({"tfe", "--data", data_path.string(), "block", "create",
+          "greeting.ok", "-t", "Hi!"},
+         create_output, create_errors);
+  REQUIRE(create_result == 0);
+
+  std::ostringstream output;
+  std::ostringstream errors;
+  const auto result = Run({"tfe", "--data", data_path.string(), "--json",
+                           "validate", "block", "greeting.ok"},
+                          output, errors);
+
+  std::filesystem::remove_all(data_path);
+
+  CHECK(result == 0);
+  const auto parsed = rfl::json::read<cli::ValidationView>(output.str());
+  REQUIRE(parsed.has_value());
+  CHECK(parsed.value().valid);
+  CHECK(errors.str().empty());
+}
+
+TEST_CASE(
+    "tfe block publish without --template reuses the currently published "
+    "block's template, type, description, language, defaults and tags") {
+  const auto data_path =
+      std::filesystem::temp_directory_path() / "tfe_publish_inherit_test";
+  std::filesystem::remove_all(data_path);
+
+  std::ostringstream create_output;
+  std::ostringstream create_errors;
+  const auto create_result = Run(
+      {"tfe", "--data", data_path.string(), "block", "create", "greeting.pub",
+       "-t", "Hi, {{name}}!", "--type", "system", "--description", "greeter",
+       "--language", "ru", "--default", "name=World", "--tag", "greeting"},
+      create_output, create_errors);
+  REQUIRE(create_result == 0);
+
+  // Publish a new version with no flags at all besides the id: every
+  // field must come from the currently published block, not silently
+  // reset to the CLI's own hardcoded defaults ("domain" type, "en"
+  // language, empty description, no defaults/tags).
+  std::ostringstream publish_output;
+  std::ostringstream publish_errors;
+  const auto publish_result =
+      Run({"tfe", "--data", data_path.string(), "--json", "block", "publish",
+          "greeting.pub"},
+         publish_output, publish_errors);
+  REQUIRE(publish_result == 0);
+  CHECK(publish_output.str().find("\"version\":\"1.1\"") != std::string::npos);
+
+  std::ostringstream render_output;
+  std::ostringstream render_errors;
+  const auto render_result =
+      Run({"tfe", "--data", data_path.string(), "--json", "render", "block",
+          "greeting.pub"},
+         render_output, render_errors);
+
+  std::filesystem::remove_all(data_path);
+
+  REQUIRE(render_result == 0);
+  CHECK(render_output.str().find("Hi, World!") != std::string::npos);
+}
+
+TEST_CASE("tfe block publish --bump major bumps the major version") {
+  const auto data_path =
+      std::filesystem::temp_directory_path() / "tfe_publish_bump_test";
+  std::filesystem::remove_all(data_path);
+
+  std::ostringstream create_output;
+  std::ostringstream create_errors;
+  const auto create_result =
+      Run({"tfe", "--data", data_path.string(), "block", "create",
+          "greeting.bump", "-t", "Hi!"},
+         create_output, create_errors);
+  REQUIRE(create_result == 0);
+
+  std::ostringstream output;
+  std::ostringstream errors;
+  const auto result =
+      Run({"tfe", "--data", data_path.string(), "--json", "block", "publish",
+          "greeting.bump", "--bump", "major"},
+         output, errors);
+
+  std::filesystem::remove_all(data_path);
+
+  CHECK(result == 0);
+  CHECK(output.str().find("\"version\":\"2.0\"") != std::string::npos);
+}

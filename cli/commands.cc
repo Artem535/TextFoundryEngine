@@ -267,6 +267,14 @@ void AddBlockWriteCommand(CLI::App& parent, AppState& state,
         .WithDescription(resolved_description)
         .WithLanguage(resolved_language)
         .WithRevisionComment(args->revision_comment);
+    // The CLI has no flag to author a param schema, so on publish it must
+    // always carry the currently published block's schema forward --
+    // otherwise `tfe block publish` would silently drop it, even though
+    // every other field either has an explicit override or falls back to
+    // the published value.
+    if (existing.has_value()) {
+      builder.WithParamSchema(existing->param_schema());
+    }
     if (tags_option->count() > 0 || !existing.has_value()) {
       for (const auto& tag : args->tags) {
         builder.WithTag(tag);
@@ -579,16 +587,32 @@ void AddValidateCommand(CLI::App& app, AppState& state) {
       ->check(CLI::IsMember({"block", "composition"}));
   command->add_option("id", args->id)->required();
   command->callback([&state, args] {
-    // A completed validation check is a success for this command even when
-    // the entity turns out invalid: the JSON body is a ValidationView, not
-    // the {"error":...} shape the CLI's error contract promises, so the
-    // exit code must not claim a command failure either -- callers read
-    // `valid`/`message` (or the table's "valid" column), not the exit
-    // code, to learn the outcome.
+    // ValidateBlock/ValidateComposition conflate two different situations
+    // into one Error: the entity couldn't even be loaded (wrong id, no
+    // such version, storage trouble), or it loaded fine but is
+    // structurally invalid. Those need different treatment: a load
+    // failure is a genuine command failure (the check never ran) and
+    // must use the documented {"error":...} contract with a non-zero
+    // exit, matching every other command's not-found behavior (e.g.
+    // `block inspect`). A structural-invalid result means the check DID
+    // run and completed successfully -- that's a ValidationView, not an
+    // error document, so it must not claim a command failure either.
+    // The two cases are distinguishable by error code: none of
+    // Composition::validate()/Fragment::validate()/BlockRef::validate()'s
+    // codes overlap with the lookup-failure codes below.
     const auto error = args->kind == "block"
                            ? state.EnsureEngine().ValidateBlock(args->id)
                            : state.EnsureEngine().ValidateComposition(args->id);
     if (error.is_error()) {
+      const bool entity_unavailable =
+          error.code == tf::ErrorCode::BlockNotFound ||
+          error.code == tf::ErrorCode::CompositionNotFound ||
+          error.code == tf::ErrorCode::VersionNotFound ||
+          error.code == tf::ErrorCode::StorageError;
+      if (entity_unavailable) {
+        state.Fail(error);
+        return;
+      }
       state.Emit(ValidationView{args->kind, args->id, false, error.message});
       return;
     }

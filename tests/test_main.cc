@@ -1197,6 +1197,31 @@ TEST_SUITE("CompositionDraftBuilder") {
     CHECK(comp.description() == "Welcome message");
     CHECK(comp.fragmentCount() == 4);
   }
+
+  TEST_CASE(
+      "AddBlockRef(BlockRef) preserves a UseLatest ref instead of silently "
+      "pinning it to Version{0,0}") {
+    EngineTestFixture fixture;
+
+    BlockDraft helloDraft = BlockDraftBuilder("greeting.hello")
+                                .WithTemplate(Template("Hello!"))
+                                .build();
+    fixture.engine.PublishBlock(std::move(helloDraft),
+                                Engine::VersionBump::Minor);
+
+    // BlockRef(id) alone -- no version -- defaults to UseLatest().
+    auto draft = CompositionDraftBuilder("uses.latest")
+                     .AddBlockRef(BlockRef("greeting.hello"))
+                     .build();
+
+    // PublishComposition's UseLatest guard must still see this ref as
+    // UseLatest and reject it -- not silently publish a composition
+    // pinned to the nonexistent Version{0,0}, which would be
+    // unrenderable with no clear error explaining why.
+    auto published = fixture.engine.PublishComposition(std::move(draft));
+    REQUIRE(published.HasError());
+    CHECK(published.error().code == ErrorCode::VersionRequired);
+  }
 }
 
 // ==================== Renderer Tests (using real Engine) ====================
