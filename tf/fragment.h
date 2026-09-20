@@ -14,6 +14,7 @@
 #include "block_ref.h"
 #include "block_type.hpp"
 #include "error.h"
+#include "types.h"
 
 namespace tf {
 
@@ -195,7 +196,9 @@ class Fragment {
     return std::get<Separator>(data_);
   }
 
-  [[nodiscard]] Conditional& AsConditional() & { return std::get<Conditional>(data_); }
+  [[nodiscard]] Conditional& AsConditional() & {
+    return std::get<Conditional>(data_);
+  }
 
   [[nodiscard]] const Conditional& AsConditional() const& {
     return std::get<Conditional>(data_);
