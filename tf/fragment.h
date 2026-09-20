@@ -106,6 +106,30 @@ struct Conditional {
 };
 
 /**
+ * Fluent builder for Conditional. If() opens a new branch; And() adds an
+ * additional (AND-combined) Condition to the branch most recently opened
+ * by If(); Then() appends a Fragment to that branch's content; Else()
+ * appends a Fragment to elseContent (creating it on first call). Then()
+ * or And() called before any If() throws EngineException -- a
+ * builder-usage bug in the calling C++ code, not a Composition data error.
+ */
+class ConditionalBuilder {
+ public:
+  ConditionalBuilder() = default;
+
+  ConditionalBuilder& If(Condition condition);
+  ConditionalBuilder& And(Condition condition);
+  ConditionalBuilder& Then(Fragment fragment);
+  ConditionalBuilder& Else(Fragment fragment);
+
+  [[nodiscard]] Conditional build();
+
+ private:
+  Conditional cond_;
+  bool has_open_branch_ = false;
+};
+
+/**
  * Fragment - single element of Composition
  * Can be BlockRef, StaticText, or Separator
  */

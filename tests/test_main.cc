@@ -834,6 +834,65 @@ TEST_SUITE("ConditionalRendering") {
   }
 }
 
+TEST_SUITE("ConditionalBuilder") {
+  TEST_CASE("If/Then/If/Then/Else builds the expected structure") {
+    auto cond = ConditionalBuilder()
+                    .If(Condition{.attribute = "level", .allowedValues = {"expert"}})
+                    .Then(Fragment::MakeStaticText("expert"))
+                    .If(Condition{.attribute = "level", .allowedValues = {"intermediate"}})
+                    .Then(Fragment::MakeStaticText("intermediate"))
+                    .Else(Fragment::MakeStaticText("beginner"))
+                    .build();
+
+    REQUIRE(cond.branches.size() == 2);
+    CHECK(cond.branches[0].conditions.size() == 1);
+    CHECK(cond.branches[0].conditions[0].attribute == "level");
+    REQUIRE(cond.branches[0].content.size() == 1);
+    CHECK(cond.branches[0].content[0].AsStaticText().text() == "expert");
+    REQUIRE(cond.branches[1].content.size() == 1);
+    CHECK(cond.branches[1].content[0].AsStaticText().text() == "intermediate");
+    REQUIRE(cond.elseContent.has_value());
+    REQUIRE(cond.elseContent->size() == 1);
+    CHECK((*cond.elseContent)[0].AsStaticText().text() == "beginner");
+  }
+
+  TEST_CASE("And adds an additional condition to the current branch") {
+    auto cond = ConditionalBuilder()
+                    .If(Condition{.attribute = "level", .allowedValues = {"expert"}})
+                    .And(Condition{.attribute = "platform", .allowedValues = {"linux"}})
+                    .Then(Fragment::MakeStaticText("expert linux"))
+                    .Else(Fragment::MakeStaticText("default"))
+                    .build();
+
+    REQUIRE(cond.branches.size() == 1);
+    REQUIRE(cond.branches[0].conditions.size() == 2);
+    CHECK(cond.branches[0].conditions[0].attribute == "level");
+    CHECK(cond.branches[0].conditions[1].attribute == "platform");
+  }
+
+  TEST_CASE("repeated Then calls accumulate content in the current branch") {
+    auto cond = ConditionalBuilder()
+                    .If(Condition{.attribute = "level", .allowedValues = {"expert"}})
+                    .Then(Fragment::MakeStaticText("part1"))
+                    .Then(Fragment::MakeStaticText("part2"))
+                    .Else(Fragment::MakeStaticText("default"))
+                    .build();
+
+    REQUIRE(cond.branches[0].content.size() == 2);
+  }
+
+  TEST_CASE("Then before any If throws EngineException") {
+    CHECK_THROWS_AS(ConditionalBuilder().Then(Fragment::MakeStaticText("x")),
+                    EngineException);
+  }
+
+  TEST_CASE("And before any If throws EngineException") {
+    CHECK_THROWS_AS(
+        ConditionalBuilder().And(Condition{.attribute = "x", .allowedValues = {"y"}}),
+        EngineException);
+  }
+}
+
 TEST_SUITE("Fragment") {
   TEST_CASE("Fragment BlockRef type") {
     BlockRef ref("block.id", Version{1, 0});

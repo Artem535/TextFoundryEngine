@@ -63,6 +63,41 @@ Error Conditional::validate(bool isDraftContext) const {
   return Error::success();
 }
 
+// ConditionalBuilder implementation
+ConditionalBuilder& ConditionalBuilder::If(Condition condition) {
+  Branch branch;
+  branch.conditions.push_back(std::move(condition));
+  cond_.branches.push_back(std::move(branch));
+  has_open_branch_ = true;
+  return *this;
+}
+
+ConditionalBuilder& ConditionalBuilder::And(Condition condition) {
+  if (!has_open_branch_) {
+    throw EngineException("ConditionalBuilder::And called before If()");
+  }
+  cond_.branches.back().conditions.push_back(std::move(condition));
+  return *this;
+}
+
+ConditionalBuilder& ConditionalBuilder::Then(Fragment fragment) {
+  if (!has_open_branch_) {
+    throw EngineException("ConditionalBuilder::Then called before If()");
+  }
+  cond_.branches.back().content.push_back(std::move(fragment));
+  return *this;
+}
+
+ConditionalBuilder& ConditionalBuilder::Else(Fragment fragment) {
+  if (!cond_.elseContent.has_value()) {
+    cond_.elseContent = std::vector<Fragment>{};
+  }
+  cond_.elseContent->push_back(std::move(fragment));
+  return *this;
+}
+
+Conditional ConditionalBuilder::build() { return std::move(cond_); }
+
 // Fragment implementation
 Error Fragment::validate(bool isDraftContext) const {
   return std::visit(
