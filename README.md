@@ -65,6 +65,10 @@ source <(tfe completion zsh)
 tfe completion fish > ~/.config/fish/completions/tfe.fish
 ```
 
+The generated scripts query the internal `__complete` protocol to suggest
+existing block and composition IDs for `inspect`, `deprecate`, `render`, and
+`validate`. It is intentionally omitted from normal `tfe --help` output.
+
 The CLI returns `0` on success, `1` for an engine/domain error, and `2` for a
 CLI usage error. In JSON mode, failures use the stable shape
 `{"error":{"code":"<ErrorCode name>","message":"<text>"}}`. The current release intentionally does not include an

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <string>
+#include <vector>
 
 #include "../cli/command_catalog.h"
 #include "../cli/completion.h"
@@ -40,10 +41,13 @@ TEST_CASE("shell completion contains commands and global options") {
 
   CHECK(bash.find("complete") != std::string::npos);
   CHECK(bash.find("compgen -f") != std::string::npos);
+  CHECK(bash.find("__complete") != std::string::npos);
   CHECK(zsh.find("#compdef tfe") != std::string::npos);
   CHECK(zsh.find("_files") != std::string::npos);
+  CHECK(zsh.find("tfe __complete") != std::string::npos);
   CHECK(fish.find("complete -c tfe") != std::string::npos);
   CHECK(fish.find("-r -F") != std::string::npos);
+  CHECK(fish.find("tfe __complete") != std::string::npos);
 }
 
 TEST_CASE("shell parser accepts only supported shells") {
@@ -51,4 +55,11 @@ TEST_CASE("shell parser accepts only supported shells") {
   CHECK(cli::ParseShell("zsh") == cli::Shell::Zsh);
   CHECK(cli::ParseShell("fish") == cli::Shell::Fish);
   CHECK_FALSE(cli::TryParseShell("powershell").has_value());
+}
+
+TEST_CASE("completion candidate filtering is deterministic and prefix based") {
+  const auto filtered = cli::FilterCompletionCandidates(
+      {"welcome", "greeting", "welcome", "farewell"}, "wel");
+
+  CHECK(filtered == std::vector<std::string>{"welcome"});
 }

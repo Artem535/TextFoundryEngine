@@ -27,6 +27,15 @@ bool HasJsonFlag(int argc, char** argv) {
   return false;
 }
 
+bool HasDynamicCompletionRequest(int argc, char** argv) {
+  for (int index = 1; index < argc; ++index) {
+    if (std::string_view(argv[index]) == "__complete") {
+      return true;
+    }
+  }
+  return false;
+}
+
 const OptionSpec& FindGlobalOption(std::string_view name) {
   for (const auto& option : GlobalOptions()) {
     if (option.long_name == name) {
@@ -67,7 +76,7 @@ int RunApplication(int argc, char** argv, std::ostream& output,
                "Print JSON instead of a table");
   app.footer(RootHelpFooter());
   app.fallthrough();
-  RegisterCommands(app, state);
+  RegisterCommands(app, state, HasDynamicCompletionRequest(argc, argv));
 
   try {
     app.parse(argc, argv);

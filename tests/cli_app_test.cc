@@ -115,3 +115,26 @@ TEST_CASE("tfe completion does not initialize the engine") {
   CHECK(output.str().find("complete -F") != std::string::npos);
   CHECK(errors.str().empty());
 }
+
+TEST_CASE("tfe dynamic completion is hidden from normal help") {
+  std::ostringstream output;
+  std::ostringstream errors;
+
+  const auto result = Run({"tfe", "--help"}, output, errors);
+
+  CHECK(result == 0);
+  CHECK(output.str().find("__complete") == std::string::npos);
+}
+
+TEST_CASE("tfe dynamic completion returns newline separated candidates") {
+  std::ostringstream output;
+  std::ostringstream errors;
+
+  const auto result = Run({"tfe", "--data", "memory:cli_dynamic_completion",
+                           "__complete", "block", "wel"},
+                          output, errors);
+
+  CHECK(result == 0);
+  CHECK(output.str().empty());
+  CHECK(errors.str().empty());
+}

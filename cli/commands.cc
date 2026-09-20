@@ -12,6 +12,8 @@
 #include "completion.h"
 #include "dto.h"
 
+#include "../tf/logger.h"
+
 namespace cli {
 namespace {
 
@@ -537,6 +539,27 @@ void AddCompletionCommand(CLI::App& app, AppState& state) {
   });
 }
 
+void AddDynamicCompletionCommand(CLI::App& app, AppState& state) {
+  auto* command = app.add_subcommand(
+      "__complete", "Internal dynamic shell completion query");
+  command->fallthrough();
+
+  auto kind = std::make_shared<std::string>();
+  auto prefix = std::make_shared<std::string>();
+  command->add_option("kind", *kind, "block or composition")
+      ->required()
+      ->check(CLI::IsMember({"block", "composition"}));
+  command->add_option("prefix", *prefix, "ID prefix")->default_val("");
+  command->callback([&state, kind, prefix] {
+    tf::Logger::SetLevel(tf::LogLevel::Error);
+    auto candidates = *kind == "block"
+                          ? state.EnsureEngine().ListBlocks()
+                          : state.EnsureEngine().ListCompositions();
+    state.EmitCompletionCandidates(
+        FilterCompletionCandidates(std::move(candidates), *prefix));
+  });
+}
+
 }  // namespace
 
 tf::Engine& AppState::EnsureEngine() {
@@ -566,16 +589,31 @@ void AppState::Emit(const ValidationView& view) {
   PrintResult(view, config.json, output);
 }
 
+void AppState::EmitCompletionCandidates(std::vector<std::string> candidates) {
+  if (config.json) {
+    PrintResult(IdListView{"completion_candidates", std::move(candidates)},
+                true, output);
+    return;
+  }
+  for (const auto& candidate : candidates) {
+    output << candidate << '\n';
+  }
+}
+
 void AppState::Fail(const tf::Error& error) {
   result_code = PrintError(error, config.json, output, errors);
 }
 
-void RegisterCommands(CLI::App& app, AppState& state) {
+void RegisterCommands(CLI::App& app, AppState& state,
+                      bool include_dynamic_completion) {
   AddBlockCommands(app, state);
   AddCompositionCommands(app, state);
   AddRenderCommand(app, state);
   AddValidateCommand(app, state);
   AddCompletionCommand(app, state);
+  if (include_dynamic_completion) {
+    AddDynamicCompletionCommand(app, state);
+  }
 }
 
 }  // namespace cli
