@@ -27,11 +27,5 @@
       "name": "ftxui",
       "version>=": "7.0.0"
     }
-  ],
-  "overrides": [
-    {
-      "name": "reflectcpp",
-      "version": "0.23.0"
-    }
   ]
 }
