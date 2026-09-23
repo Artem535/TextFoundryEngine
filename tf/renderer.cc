@@ -4,6 +4,7 @@
 
 #include "renderer.h"
 
+#include <charconv>
 #include <sstream>
 
 #include "logger.h"
@@ -147,6 +148,12 @@ Result<std::string> Renderer::RenderFragment(
       return Result<std::string>(
           Error{ErrorCode::InvalidParamType,
                 "Conditional fragment reached RenderFragment unresolved"});
+
+    case FragmentType::Group:
+      return RenderGroup(fragment.AsGroup(), context, blocksUsed);
+
+    case FragmentType::BlockElement:
+      return RenderBlockElement(fragment.AsBlockElement(), context, blocksUsed);
   }
   return Result<std::string>(
       Error{ErrorCode::InvalidParamType, "Unknown fragment type"});
@@ -190,6 +197,162 @@ Result<std::string> Renderer::ExpandBlockRef(
   return block->templ().Expand(paramsResult.value());
 }
 
+// Why two functions, not one: the natural-looking single-function version
+// (render each item to one string with `depth * 2` spaces of leading indent
+// baked in, recursing into a nested Group at `depth + 1`, then joining) has a
+// real bug: a nested Group's own lines already come back pre-indented for
+// *their* depth, so splicing them into the parent item's line list and then
+// *also* prefixing every non-first line with the parent's marker-width
+// padding double-indents them. The clean fix is for RenderGroupLines to
+// never bake in any indent for its own depth at all -- it always renders as
+// if it were top-level ("1. salt", not "  1. salt") -- and exactly one place
+// adds exactly one level of indent (marker.size() spaces) to every line of a
+// finished Group's output *except* the first: the same uniform per-line rule
+// already applied to a single item's own wrapped multi-line text. That rule
+// applied once, at exactly the point where a rendered value (whether an
+// ordinary fragment's multi-line text or a whole nested list) is folded into
+// `raw`, is what gives correct, single-level indentation with no
+// special-casing needed for "was this line's origin a nested list or not".
+Result<std::vector<std::string>> Renderer::RenderGroupLines(
+    const Group& group, const RenderContext& context,
+    std::vector<std::pair<BlockId, Version>>& blocksUsed) const {
+  std::vector<std::string> lines;
+
+  for (size_t itemIndex = 0; itemIndex < group.items.size(); ++itemIndex) {
+    const std::string marker = (group.kind == GroupKind::Numbered)
+                                   ? (std::to_string(itemIndex + 1) + ". ")
+                                   : std::string("- ");
+    const std::string padding(marker.size(), ' ');
+
+    // This item's own contributed lines, unindented and without the marker
+    // -- built left to right. Consecutive plain fragments concatenate onto
+    // the same running line (direct concatenation, per the design spec); a
+    // nested Group always ends the current line and contributes its own
+    // lines (also unindented at this point -- see the two-function split
+    // above) as additional entries.
+    std::vector<std::string> raw;
+    std::ostringstream currentLine;
+    bool haveOpenLine = false;
+
+    for (const auto& fragment : group.items[itemIndex]) {
+      if (fragment.IsGroup()) {
+        auto nestedLines = RenderGroupLines(fragment.AsGroup(), context, blocksUsed);
+        if (nestedLines.HasError()) {
+          return nestedLines;
+        }
+        if (haveOpenLine) {
+          raw.push_back(currentLine.str());
+          currentLine.str("");
+          haveOpenLine = false;
+        }
+        for (const auto& nestedLine : nestedLines.value()) {
+          raw.push_back(nestedLine);
+        }
+        continue;
+      }
+
+      auto rendered = RenderFragment(fragment, context, blocksUsed);
+      if (rendered.HasError()) {
+        return Result<std::vector<std::string>>(rendered.error());
+      }
+      // A rendered fragment's own text might already contain '\n' (e.g. a
+      // multi-line StaticText) -- split so each becomes its own raw line
+      // rather than corrupting later marker alignment.
+      std::istringstream renderedStream(rendered.value());
+      std::string piece;
+      bool firstPiece = true;
+      while (std::getline(renderedStream, piece)) {
+        if (!firstPiece) {
+          raw.push_back(currentLine.str());
+          currentLine.str("");
+        }
+        currentLine << piece;
+        haveOpenLine = true;
+        firstPiece = false;
+      }
+    }
+    if (haveOpenLine) {
+      raw.push_back(currentLine.str());
+    }
+    if (raw.empty()) {
+      raw.push_back("");  // an item with zero fragments still gets a marker-only line
+    }
+
+    for (size_t i = 0; i < raw.size(); ++i) {
+      lines.push_back((i == 0 ? marker : padding) + raw[i]);
+    }
+  }
+
+  return Result<std::vector<std::string>>(std::move(lines));
+}
+
+Result<std::string> Renderer::RenderGroup(
+    const Group& group, const RenderContext& context,
+    std::vector<std::pair<BlockId, Version>>& blocksUsed) const {
+  auto lines = RenderGroupLines(group, context, blocksUsed);
+  if (lines.HasError()) {
+    return Result<std::string>(lines.error());
+  }
+  std::ostringstream result;
+  for (size_t i = 0; i < lines.value().size(); ++i) {
+    if (i > 0) {
+      result << "\n";
+    }
+    result << lines.value()[i];
+  }
+  return Result<std::string>(result.str());
+}
+
+Result<std::string> Renderer::RenderBlockElement(
+    const BlockElement& element, const RenderContext& context,
+    std::vector<std::pair<BlockId, Version>>& blocksUsed) const {
+  std::ostringstream innerStream;
+  for (const auto& fragment : element.content) {
+    auto rendered = RenderFragment(fragment, context, blocksUsed);
+    if (rendered.HasError()) {
+      return rendered;
+    }
+    innerStream << rendered.value();
+  }
+  const std::string inner = innerStream.str();
+
+  switch (element.kind) {
+    case BlockElementKind::Heading: {
+      int level = 1;
+      const auto* begin = element.attr.data();
+      const auto* end = begin + element.attr.size();
+      auto parsed = std::from_chars(begin, end, level);
+      if (parsed.ec != std::errc{} || parsed.ptr != end || level < 1 || level > 6) {
+        // validate() guarantees this for any published Composition; Render()
+        // loads from storage rather than validating again, so this is a
+        // defensive fallback, not a redundant check (same posture as
+        // ResolveConditionals's elseContent check below it).
+        level = 1;
+      }
+      return Result<std::string>(std::string(level, '#') + " " + inner);
+    }
+    case BlockElementKind::Quote: {
+      std::istringstream innerLines(inner);
+      std::ostringstream quoted;
+      std::string line;
+      bool first = true;
+      while (std::getline(innerLines, line)) {
+        if (!first) {
+          quoted << "\n";
+        }
+        first = false;
+        quoted << "> " << line;
+      }
+      return Result<std::string>(quoted.str());
+    }
+    case BlockElementKind::CodeBlock: {
+      return Result<std::string>("```" + element.attr + "\n" + inner + "\n```");
+    }
+  }
+  return Result<std::string>(
+      Error{ErrorCode::InvalidParamType, "Unknown BlockElementKind"});
+}
+
 StructuralStyle Renderer::GetEffectiveStyle(const Composition& composition) {
   if (composition.GetStyleProfile().has_value()) {
     return composition.GetStyleProfile()->structural;
@@ -203,6 +366,25 @@ std::vector<Fragment> Renderer::ResolveConditionals(
   resolved.reserve(fragments.size());
 
   for (const auto& fragment : fragments) {
+    if (fragment.IsGroup()) {
+      const Group& group = fragment.AsGroup();
+      Group resolvedGroup{.kind = group.kind};
+      resolvedGroup.items.reserve(group.items.size());
+      for (const auto& item : group.items) {
+        resolvedGroup.items.push_back(ResolveConditionals(item, params));
+      }
+      resolved.push_back(Fragment::MakeGroup(std::move(resolvedGroup)));
+      continue;
+    }
+
+    if (fragment.IsBlockElement()) {
+      const BlockElement& elem = fragment.AsBlockElement();
+      resolved.push_back(Fragment::MakeBlockElement(BlockElement{
+          .kind = elem.kind, .attr = elem.attr,
+          .content = ResolveConditionals(elem.content, params)}));
+      continue;
+    }
+
     if (!fragment.IsConditional()) {
       resolved.push_back(fragment);
       continue;

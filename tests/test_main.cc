@@ -1515,6 +1515,160 @@ TEST_SUITE("ConditionalRendering") {
   }
 }
 
+TEST_SUITE("GroupRendering") {
+  TEST_CASE_FIXTURE(EngineTestFixture, "a flat bulleted list renders with '- ' markers") {
+    CompositionDraftBuilder builder("group.flat_bulleted");
+    Group group{.kind = GroupKind::Bulleted,
+               .items = {{Fragment::MakeStaticText("first")},
+                         {Fragment::MakeStaticText("second")},
+                         {Fragment::MakeStaticText("third")}}};
+    builder.AddGroup(std::move(group));
+    auto pubResult = engine.PublishComposition(builder.build(), Engine::VersionBump::Minor);
+    REQUIRE(pubResult.HasValue());
+
+    auto result = engine.Render("group.flat_bulleted");
+    REQUIRE(result.HasValue());
+    CHECK(result.value().text == "- first\n- second\n- third");
+  }
+
+  TEST_CASE_FIXTURE(EngineTestFixture, "a flat numbered list renders with '1. ', '2. ', ... markers") {
+    CompositionDraftBuilder builder("group.flat_numbered");
+    Group group{.kind = GroupKind::Numbered,
+               .items = {{Fragment::MakeStaticText("first")},
+                         {Fragment::MakeStaticText("second")}}};
+    builder.AddGroup(std::move(group));
+    auto pubResult = engine.PublishComposition(builder.build(), Engine::VersionBump::Minor);
+    REQUIRE(pubResult.HasValue());
+
+    auto result = engine.Render("group.flat_numbered");
+    REQUIRE(result.HasValue());
+    CHECK(result.value().text == "1. first\n2. second");
+  }
+
+  TEST_CASE_FIXTURE(EngineTestFixture,
+                    "a nested list renders indented under its parent item, numbering restarting at 1") {
+    CompositionDraftBuilder builder("group.nested");
+    Group inner{.kind = GroupKind::Numbered,
+               .items = {{Fragment::MakeStaticText("salt")},
+                         {Fragment::MakeStaticText("pepper")}}};
+    Group outer{.kind = GroupKind::Bulleted,
+               .items = {{Fragment::MakeStaticText("tomatoes")},
+                         {Fragment::MakeStaticText("spices:"),
+                          Fragment::MakeGroup(std::move(inner))},
+                         {Fragment::MakeStaticText("onion")}}};
+    builder.AddGroup(std::move(outer));
+    auto pubResult = engine.PublishComposition(builder.build(), Engine::VersionBump::Minor);
+    REQUIRE(pubResult.HasValue());
+
+    auto result = engine.Render("group.nested");
+    REQUIRE(result.HasValue());
+    CHECK(result.value().text ==
+          "- tomatoes\n"
+          "- spices:\n"
+          "  1. salt\n"
+          "  2. pepper\n"
+          "- onion");
+  }
+
+  TEST_CASE_FIXTURE(EngineTestFixture, "a Group item containing a BlockRef renders the block's expanded template") {
+    createAndPublishBlock("group.item_block", "an ingredient");
+    CompositionDraftBuilder builder("group.with_block_ref");
+    Group group{.kind = GroupKind::Bulleted,
+               .items = {{Fragment::MakeBlockRef(
+                   BlockRef("group.item_block", Version{1, 0}))}}};
+    builder.AddGroup(std::move(group));
+    auto pubResult = engine.PublishComposition(builder.build(), Engine::VersionBump::Minor);
+    REQUIRE(pubResult.HasValue());
+
+    auto result = engine.Render("group.with_block_ref");
+    REQUIRE(result.HasValue());
+    CHECK(result.value().text == "- an ingredient");
+  }
+
+  TEST_CASE_FIXTURE(EngineTestFixture,
+                    "a Conditional nested inside a Group item is resolved at render time") {
+    CompositionDraftBuilder builder("group.with_conditional");
+    Conditional cond;
+    cond.branches.push_back(Branch{
+        .conditions = {Condition{.attribute = "level", .allowedValues = {"expert"}}},
+        .content = {Fragment::MakeStaticText("expert item")}});
+    cond.elseContent = std::vector<Fragment>{Fragment::MakeStaticText("default item")};
+    Group group{.kind = GroupKind::Bulleted,
+               .items = {{Fragment::MakeConditional(std::move(cond))}}};
+    builder.AddGroup(std::move(group));
+    auto pubResult = engine.PublishComposition(builder.build(), Engine::VersionBump::Minor);
+    REQUIRE(pubResult.HasValue());
+
+    auto expertResult =
+        engine.Render("group.with_conditional", RenderContext{}.WithParam("level", "expert"));
+    REQUIRE(expertResult.HasValue());
+    CHECK(expertResult.value().text == "- expert item");
+
+    auto defaultResult = engine.Render("group.with_conditional");
+    REQUIRE(defaultResult.HasValue());
+    CHECK(defaultResult.value().text == "- default item");
+  }
+
+  TEST_CASE_FIXTURE(EngineTestFixture,
+                    "a Group nested inside a Conditional branch still resolves correctly (regression)") {
+    CompositionDraftBuilder builder("group.inside_conditional");
+    Group group{.kind = GroupKind::Bulleted,
+               .items = {{Fragment::MakeStaticText("a")}, {Fragment::MakeStaticText("b")}}};
+    Conditional cond;
+    cond.branches.push_back(Branch{
+        .conditions = {Condition{.attribute = "show", .allowedValues = {"list"}}},
+        .content = {Fragment::MakeGroup(std::move(group))}});
+    cond.elseContent = std::vector<Fragment>{Fragment::MakeStaticText("no list")};
+    builder.AddConditional(std::move(cond));
+    auto pubResult = engine.PublishComposition(builder.build(), Engine::VersionBump::Minor);
+    REQUIRE(pubResult.HasValue());
+
+    auto result =
+        engine.Render("group.inside_conditional", RenderContext{}.WithParam("show", "list"));
+    REQUIRE(result.HasValue());
+    CHECK(result.value().text == "- a\n- b");
+  }
+}
+
+TEST_SUITE("BlockElementRendering") {
+  TEST_CASE_FIXTURE(EngineTestFixture, "Heading level 2 renders with two '#' characters") {
+    CompositionDraftBuilder builder("block_element.heading");
+    builder.AddBlockElement(Fragment::MakeHeading(2, {Fragment::MakeStaticText("Title")})
+                                .AsBlockElement());
+    auto pubResult = engine.PublishComposition(builder.build(), Engine::VersionBump::Minor);
+    REQUIRE(pubResult.HasValue());
+
+    auto result = engine.Render("block_element.heading");
+    REQUIRE(result.HasValue());
+    CHECK(result.value().text == "## Title");
+  }
+
+  TEST_CASE_FIXTURE(EngineTestFixture, "Quote prefixes every line with '> '") {
+    CompositionDraftBuilder builder("block_element.quote");
+    builder.AddBlockElement(
+        Fragment::MakeQuote({Fragment::MakeStaticText("line one")}).AsBlockElement());
+    auto pubResult = engine.PublishComposition(builder.build(), Engine::VersionBump::Minor);
+    REQUIRE(pubResult.HasValue());
+
+    auto result = engine.Render("block_element.quote");
+    REQUIRE(result.HasValue());
+    CHECK(result.value().text == "> line one");
+  }
+
+  TEST_CASE_FIXTURE(EngineTestFixture, "CodeBlock wraps content in a language-tagged fence") {
+    CompositionDraftBuilder builder("block_element.code");
+    builder.AddBlockElement(
+        Fragment::MakeCodeBlock("cpp", {Fragment::MakeStaticText("int x = 1;")})
+            .AsBlockElement());
+    auto pubResult = engine.PublishComposition(builder.build(), Engine::VersionBump::Minor);
+    REQUIRE(pubResult.HasValue());
+
+    auto result = engine.Render("block_element.code");
+    REQUIRE(result.HasValue());
+    CHECK(result.value().text == "```cpp\nint x = 1;\n```");
+  }
+}
+
 TEST_SUITE("ConditionalBuilder") {
   TEST_CASE("If/Then/If/Then/Else builds the expected structure") {
     auto cond = ConditionalBuilder()
