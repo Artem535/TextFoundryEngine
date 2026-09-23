@@ -916,7 +916,7 @@ Result<std::string> Engine::Normalize(const std::string& text,
 Result<std::vector<Fragment>> Engine::NormalizeFragments(
     const std::vector<Fragment>& fragments,
     const CompositionNormalizationRequest& request,
-    const std::string& normalization_key_tag,
+    const std::string& normalization_key_tag, bool persist_derived_blocks,
     std::vector<std::pair<BlockId, BlockId>>& rewritten_blocks) {
   std::vector<Fragment> result;
   result.reserve(fragments.size());
@@ -947,8 +947,9 @@ Result<std::vector<Fragment>> Engine::NormalizeFragments(
       for (const auto& branch : cond.branches) {
         Branch normalized_branch;
         normalized_branch.conditions = branch.conditions;
-        auto normalized_content = NormalizeFragments(
-            branch.content, request, normalization_key_tag, rewritten_blocks);
+        auto normalized_content =
+            NormalizeFragments(branch.content, request, normalization_key_tag,
+                               persist_derived_blocks, rewritten_blocks);
         if (normalized_content.HasError()) {
           return Result<std::vector<Fragment>>(normalized_content.error());
         }
@@ -956,8 +957,9 @@ Result<std::vector<Fragment>> Engine::NormalizeFragments(
         normalized_cond.branches.push_back(std::move(normalized_branch));
       }
       if (cond.elseContent.has_value()) {
-        auto normalized_else = NormalizeFragments(
-            *cond.elseContent, request, normalization_key_tag, rewritten_blocks);
+        auto normalized_else =
+            NormalizeFragments(*cond.elseContent, request, normalization_key_tag,
+                               persist_derived_blocks, rewritten_blocks);
         if (normalized_else.HasError()) {
           return Result<std::vector<Fragment>>(normalized_else.error());
         }
@@ -1005,6 +1007,16 @@ Result<std::vector<Fragment>> Engine::NormalizeFragments(
         return Result<std::vector<Fragment>>(
             Error{ErrorCode::InvalidParamType,
                   "Normalized block changed required placeholders"});
+      }
+
+      if (!persist_derived_blocks) {
+        // Preview mode: report what normalization would produce without
+        // writing a new Block to storage. rewritten_blocks still reports
+        // the deterministic id this BlockRef would become if applied.
+        result.push_back(
+            Fragment::MakeStaticText(normalized_template.Content()));
+        rewritten_blocks.emplace_back(source_block.Id(), derived_block_id);
+        continue;
       }
 
       BlockDraftBuilder block_builder(derived_block_id);
@@ -1154,8 +1166,9 @@ Result<NormalizedCompositionPreview> Engine::PreviewNormalizeComposition(
 
   std::vector<std::pair<BlockId, BlockId>> rewritten_blocks;
   const std::string normalization_key_tag = NormalizationKeyTag(normalization_key);
-  auto normalized_fragments = NormalizeFragments(
-      source.fragments(), request, normalization_key_tag, rewritten_blocks);
+  auto normalized_fragments =
+      NormalizeFragments(source.fragments(), request, normalization_key_tag,
+                         /*persist_derived_blocks=*/false, rewritten_blocks);
   if (normalized_fragments.HasError()) {
     return Result<NormalizedCompositionPreview>(normalized_fragments.error());
   }
@@ -1226,8 +1239,9 @@ Result<NormalizedCompositionResult> Engine::NormalizeComposition(
 
   std::vector<std::pair<BlockId, BlockId>> rewritten_blocks;
   const std::string normalization_key_tag = NormalizationKeyTag(normalization_key);
-  auto normalized_fragments = NormalizeFragments(
-      source.fragments(), request, normalization_key_tag, rewritten_blocks);
+  auto normalized_fragments =
+      NormalizeFragments(source.fragments(), request, normalization_key_tag,
+                         /*persist_derived_blocks=*/true, rewritten_blocks);
   if (normalized_fragments.HasError()) {
     return Result<NormalizedCompositionResult>(normalized_fragments.error());
   }

@@ -689,7 +689,9 @@ TEST_SUITE("CompositionNormalization") {
 
     // First preview: no derived block and no derivative composition exist
     // yet, so this goes through the fresh path and calls the normalizer
-    // exactly once (for the one BlockRef in the tree).
+    // exactly once (for the one BlockRef in the tree) to compute the text --
+    // but does NOT publish a Block to storage (Preview is not allowed to
+    // have persistent side effects; see the "does not publish" test below).
     auto first_preview = fixture.engine.PreviewNormalizeComposition(request);
     REQUIRE(first_preview.HasValue());
     CHECK(fake_normalizer->call_count() == 1);
@@ -701,21 +703,22 @@ TEST_SUITE("CompositionNormalization") {
           std::string::npos);
     CHECK(first_preview.value().preview_text.find("[else]") != std::string::npos);
 
-    // PreviewNormalizeComposition never publishes a derivative composition
-    // itself (only NormalizeComposition does) -- publish one now so the
-    // second preview call below has something to find in its
-    // composition-level cache check. The block-level cache (checked by
-    // NormalizeFragments inside this call) already has "norm.role.expert"
-    // tagged from the first preview above, so this does NOT call the
-    // normalizer again.
+    // Because the preview above didn't persist anything, NormalizeComposition
+    // (apply) finds no pre-tagged cached block and must call the normalizer
+    // again itself -- this is what actually publishes "norm.role.expert" for
+    // the first time and tags it. Bringing call_count to 2 here (not 1) is
+    // the point: it proves the first preview left no exploitable cache
+    // behind.
     auto normalize_result = fixture.engine.NormalizeComposition(request);
     REQUIRE(normalize_result.HasValue());
-    CHECK(fake_normalizer->call_count() == 1);
+    CHECK(fake_normalizer->call_count() == 2);
 
-    // Second preview: the derivative composition now exists with a
-    // matching style, so this takes the reuse_cached_blocks fast path --
-    // reading straight from the stored, already-normalized Conditional via
-    // FragmentTreeToPreviewText, with zero further normalizer calls.
+    // Second preview: the derivative composition now exists (published by
+    // the apply call above) with a matching style, so this takes the
+    // reuse_cached_blocks fast path -- reading straight from the stored,
+    // already-normalized Conditional via FragmentTreeToPreviewText, which
+    // never touches NormalizeFragments or the block normalizer at all.
+    // call_count stays at 2, unchanged by this call.
     auto second_preview = fixture.engine.PreviewNormalizeComposition(request);
     REQUIRE(second_preview.HasValue());
     CHECK(second_preview.value().preview_text.find("Normalized expert guide.") !=
@@ -725,7 +728,49 @@ TEST_SUITE("CompositionNormalization") {
     CHECK(second_preview.value().preview_text.find("[if level in {expert}]") !=
           std::string::npos);
     CHECK(second_preview.value().preview_text.find("[else]") != std::string::npos);
+    CHECK(fake_normalizer->call_count() == 2);
+  }
+
+  TEST_CASE(
+      "PreviewNormalizeComposition's fresh path computes normalized text "
+      "without publishing a new Block to storage") {
+    EngineTestFixture fixture;
+
+    Block expert_block =
+        fixture.createAndPublishBlock("role.expert", "You are an expert.");
+
+    CompositionDraftBuilder composition_builder("prompt.preview_no_persist");
+    composition_builder.AddBlockRef(
+        BlockRef("role.expert", expert_block.version()));
+    auto composition = fixture.engine.PublishComposition(
+        composition_builder.build(), Version{1, 0});
+    REQUIRE(composition.HasValue());
+
+    auto fake_normalizer = std::make_shared<FakeBlockNormalizer>(
+        Result<NormalizedBlockData>(NormalizedBlockData{
+            .templ = "normalized expert text",
+            .description = std::nullopt,
+            .language = std::nullopt,
+        }));
+    fixture.engine.SetBlockNormalizer(fake_normalizer);
+
+    CompositionNormalizationRequest request{
+        .source_composition_id = "prompt.preview_no_persist",
+        .style = SemanticStyle{.tone = std::string("warm")},
+    };
+
+    auto preview = fixture.engine.PreviewNormalizeComposition(request);
+    REQUIRE(preview.HasValue());
+    CHECK(preview.value().preview_text == "normalized expert text");
     CHECK(fake_normalizer->call_count() == 1);
+
+    // The real proof preview didn't persist: a real apply call right after
+    // still has to call the normalizer itself, since there's no pre-tagged
+    // cached block for it to reuse. If preview had silently published one
+    // (the bug this test guards against), call_count would stay at 1 here.
+    auto apply_result = fixture.engine.NormalizeComposition(request);
+    REQUIRE(apply_result.HasValue());
+    CHECK(fake_normalizer->call_count() == 2);
   }
 }
 

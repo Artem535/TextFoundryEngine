@@ -464,16 +464,25 @@ class Engine {
   /**
    * Recursively normalizes a fragment list: StaticText via the configured
    * INormalizer (if request.normalize_static_text), BlockRef via the
-   * configured IBlockNormalizer (deriving/publishing/caching a normalized
-   * Block, same as today), Separator unchanged, and Conditional by
+   * configured IBlockNormalizer, Separator unchanged, and Conditional by
    * normalizing every branch's content and elseContent with this same
    * method. Used by NormalizeComposition and by
    * PreviewNormalizeComposition's fresh (non-cached) path.
+   *
+   * `persist_derived_blocks` controls whether a freshly-normalized BlockRef
+   * (one not already satisfied by an existing tagged cached Block) gets
+   * published as a new Block: true for NormalizeComposition (the point of
+   * applying is to create the derivative), false for Preview (which must
+   * stay side-effect-free -- a not-persisted BlockRef comes back as an
+   * inline StaticText holding the normalized text instead of a BlockRef to
+   * a Block that was never actually created). A reused, already-tagged
+   * cached Block is referenced via a real BlockRef in both modes, since
+   * referencing something that already exists isn't a new write.
    */
   [[nodiscard]] Result<std::vector<Fragment>> NormalizeFragments(
       const std::vector<Fragment>& fragments,
       const CompositionNormalizationRequest& request,
-      const std::string& normalization_key_tag,
+      const std::string& normalization_key_tag, bool persist_derived_blocks,
       std::vector<std::pair<BlockId, BlockId>>& rewritten_blocks);
 
   /**
