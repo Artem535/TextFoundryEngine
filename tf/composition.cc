@@ -215,8 +215,19 @@ CompositionDraftBuilder& CompositionDraftBuilder::WithRevisionComment(
 }
 
 CompositionDraftBuilder& CompositionDraftBuilder::AddBlockRef(BlockRef ref) {
-  comp_.AddBlockRef(ref.GetBlockId(), ref.version().value_or(Version{0, 0}),
-                    ref.LocalParams());
+  // A UseLatest ref (the default-constructed BlockRef(id) shape) must go
+  // through AddBlockRefLatest, which preserves that flag -- routing it
+  // through the versioned Composition::AddBlockRef below would silently
+  // pin it to Version{0,0} instead of UseLatest, producing a composition
+  // that PublishComposition's UseLatest guard can no longer catch, so it
+  // would publish successfully yet reference a version that was never
+  // published and can never be rendered.
+  if (ref.UseLatest()) {
+    comp_.AddBlockRefLatest(ref.GetBlockId(), ref.LocalParams());
+  } else {
+    comp_.AddBlockRef(ref.GetBlockId(), ref.version().value_or(Version{0, 0}),
+                      ref.LocalParams());
+  }
   return *this;
 }
 

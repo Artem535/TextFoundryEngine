@@ -4,9 +4,9 @@
 
 **Goal:** Give `TextFoundryEngine` its own standalone CLI binary (`tfe`) that exercises the engine directly — no dependency on TextFoundry's `text_foundry_cli` or any TextFoundry code — so an agent (or a human) can create/publish blocks and compositions, including ones using the new `Conditional` fragment type, render them, and validate them, entirely from this repository. Every command supports a `--json` output mode for agent consumption and a human-readable table mode by default.
 
-**Architecture:** A new `cli/` directory holds a small CLI11-based `App` that talks to `tf::Engine` directly (same pattern TextFoundry's own CLI uses, but reimplemented here rather than shared/extracted — see "Why not share code with `text_foundry_cli`" below). A thin DTO layer (`cli/dto.h`/`cli/dto.cc`) mirrors `Fragment`/`Composition`/`Block` as plain, `reflect-cpp`-serializable structs, used for two purposes: (1) parsing a `--from-json`/stdin document into a full `Composition` draft, including nested `Conditional` branches that flag-based input can't express; (2) building command results, which a single shared print helper renders either as JSON (`reflect-cpp`) or as an FTXUI `Table` depending on whether `--json` was passed.
+**Architecture:** A new `cli/` directory holds a small CLI11-based `App` that talks to `tf::Engine` directly (same pattern TextFoundry's own CLI uses, but reimplemented here rather than shared/extracted — see "Why not share code with `text_foundry_cli`" below). A thin DTO layer (`cli/dto.h`/`cli/dto.cc`) mirrors `Fragment`/`Composition`/`Block` as plain, `reflect-cpp`-serializable structs, used for two purposes: (1) parsing a `--from-json`/stdin document into a full `Composition` draft, including nested `Conditional` branches that flag-based input can't express; (2) building command results, which a single shared print helper renders either as JSON (`reflect-cpp`) or as an FTXUI `Table` depending on whether `--json` was passed. A shared command catalog is the source of truth for CLI11 registration and shell-completion generation, so the parser and generated Bash/Zsh/Fish completions cannot drift.
 
-**Tech Stack:** C++23, `CLI11` (new vcpkg dependency), `FTXUI`'s `dom` module (new `FetchContent` dependency, pinned `v6.1.9`), `reflectcpp` (existing dependency), `textfoundry_core` + `textfoundry_objectbox_store` (existing in-repo targets).
+**Tech Stack:** C++23, `CLI11` (vcpkg dependency), `FTXUI`'s `dom` and `screen` modules (vcpkg dependency, current repository port), `reflectcpp` (existing dependency), `textfoundry_core` + `textfoundry_objectbox_store` (existing in-repo targets).
 
 ## Context
 
@@ -21,8 +21,8 @@ This CLI is meant to be comfortable for an LLM agent to drive: structured JSON o
 - Lives entirely in `TextFoundryEngine` (`/home/a.durynin/Projects/C++/TextFoundryEngine`), new `cli/` directory. No changes to `TextFoundry`'s `src/text_foundry_cli` or any other TextFoundry code.
 - New binary target name: `tfe`. New CMake option `TEXTFOUNDRY_ENGINE_BUILD_CLI`, default `ON`.
 - Depends on `textfoundry_objectbox_store` (needs a real, persisted `IBlockRepository`/`ICompositionRepository` — `EngineConfig::default_data_path` supports `memory:` for tests/dry-run, but the CLI's default is a real on-disk path, mirroring `tf`'s own default). Building `tfe` therefore requires `TEXTFOUNDRY_ENGINE_BUILD_OBJECTBOX_STORE=ON`; if a consumer sets that `OFF`, `TEXTFOUNDRY_ENGINE_BUILD_CLI` must also resolve to `OFF` (CMake `option` dependency, not a hard error) — this is checked during plan-writing against the exact CMake option-dependency pattern already used elsewhere in the codebase, if any, or done with a plain `if()` guard around `add_subdirectory(cli)`.
-- New vcpkg dependency: `cli11` (matches TextFoundry's own `vcpkg.json` floor, `version>=2.6.1`). New `FetchContent` dependency: FTXUI pinned to `GIT_TAG v6.1.9` (matches TextFoundry's own pin) — not a vcpkg port, mirroring TextFoundry's existing FTXUI acquisition pattern.
-- Command surface is the **non-AI subset** of `tf`'s commands, confirmed against `text_foundry_cli/application.cc`: `block create`, `block publish`, `block list`, `block deprecate`, `block inspect`, `comp create`, `comp list`, `comp deprecate`, `comp inspect`, `render`, `validate`. No `tui` subcommand, no AI-assisted commands (those depend on `textfoundry_ai`, which is TextFoundry-only and not part of the engine).
+- New vcpkg dependencies: `cli11` and `ftxui`. The CLI must remain buildable from the manifest and must not fetch FTXUI through an independent `FetchContent` declaration.
+- Command surface is the **non-AI subset** of `tf`'s commands, confirmed against `text_foundry_cli/application.cc`: `block create`, `block publish`, `block list`, `block deprecate`, `block inspect`, `comp create`, `comp list`, `comp deprecate`, `comp inspect`, `render`, `validate`, and `completion bash|zsh|fish`. No `tui` subcommand, no AI-assisted commands (those depend on `textfoundry_ai`, which is TextFoundry-only and not part of the engine).
 - Output: every command supports a global `--json` flag. With `--json`, stdout is a single JSON document (`reflect-cpp`-serialized) and nothing else. Without it, stdout is an FTXUI-rendered table. Both modes report errors the same way (see "Error Output" below) and use the process exit code to signal success/failure — an agent parsing `--json` output never needs to distinguish success from failure by parsing text.
 - `reflect-cpp` cannot serialize the engine's domain classes directly (`Fragment`/`Composition`/`Block` have private members) — confirmed in the prior CLI-redesign investigation by reading `reflect-cpp`'s actual headers. All JSON in and out of this CLI goes through the DTO layer in `cli/dto.h`/`cli/dto.cc`; the domain classes themselves are not touched.
 
@@ -53,25 +53,20 @@ struct StaticTextFragmentDto {
 };
 
 struct SeparatorFragmentDto {
-  std::string text;
+  std::string separator_type;  // "newline" | "paragraph" | "hr"
 };
 
 struct ConditionalFragmentDto {
   std::vector<BranchDto> branches;
-  std::vector<FragmentDto> else_content;  // always present in the DTO;
-                                            // absence in JSON is itself the
-                                            // validate()-time error, surfaced
-                                            // after conversion, not by the
-                                            // parser
+  std::optional<std::vector<FragmentDto>> else_content;
 };
 
-// FragmentDto is a tagged union over the four variants above, discriminated
-// by a "type" field ("block_ref" | "static_text" | "separator" |
-// "conditional"). Exact reflect-cpp construct (rfl::TaggedUnion vs. a
-// hand-rolled discriminator field checked in a manual From/To function) is
-// confirmed against reflect-cpp's real headers during plan-writing, the same
-// way the DTO-vs-domain-class serialization limitation itself was confirmed
-// earlier — not assumed here.
+// FragmentDto is a hand-rolled tagged union over the four variants above,
+// discriminated by a "kind" field ("block_ref" | "static_text" |
+// "separator" | "conditional"). Exactly one matching optional payload must
+// be present; conversion validates this invariant before creating a domain
+// Fragment. This keeps the public JSON contract explicit and independent of
+// reflect-cpp's internal tagged-union representation.
 
 struct CompositionDto {
   std::string id;
@@ -151,9 +146,26 @@ Command failures (`Error`/`Result<T>` failure returned by the engine, or a CLI-l
 - `--json`: a single JSON document to **stdout**, `{"error": {"code": "<ErrorCode name>", "message": "<text>"}}`, and a non-zero exit code. Not split across stdout/stderr — an agent parsing `--json` output reads exactly one stream.
 - table mode: a short `Error: <message>` line to **stderr** (not rendered as a table — a single line doesn't benefit from FTXUI framing), and the same non-zero exit code.
 
-Exit code convention: `0` success, `1` engine/domain error (`Error` returned by the engine), `2` CLI usage error (bad flags, mutually-exclusive input, missing required argument — CLI11's own convention, left as CLI11's default rather than reinvented).
+Exit code convention: `0` success, `1` engine/domain error (`Error` returned by the engine), `2` CLI usage error (bad flags, mutually-exclusive input, missing required argument). CLI11's native non-zero parse codes are normalized to `2` by `tfe` so shell scripts do not depend on CLI11's internal code table.
 
-## 3. Build Wiring
+## 3. Shell Completion
+
+CLI11 provides parsing, help, subcommands, and validation, but it does not
+generate shell completion scripts. `cli/command_catalog.*` therefore defines
+the root commands, subcommands, aliases, and options once, while
+`cli/completion.*` renders that catalog for Bash, Zsh, and Fish.
+
+The stable root aliases are `b` for `block` and `composition` for `comp`.
+The root help footer is also generated from this catalog and contains the
+aliases plus representative examples, so help text and completion do not
+drift apart.
+
+`tfe completion <shell>` writes only the generated script to stdout. The first
+version completes command names, fixed choices, and JSON file paths. It does
+not open the ObjectBox store or complete dynamic block/composition IDs; that
+can be added later without changing the parser contract.
+
+## 4. Build Wiring
 
 **New directory: `cli/`**, new files `cli/main.cc`, `cli/app.h`/`cli/app.cc` (CLI11 setup, one `Setup*Commands` function per command group, mirroring `text_foundry_cli/application.cc`'s structure since that structure is proven, not because code is shared), `cli/dto.h`/`cli/dto.cc`, `cli/output.h`/`cli/output.cc`.
 
@@ -176,18 +188,12 @@ option(TEXTFOUNDRY_ENGINE_BUILD_CLI
 )
 ```
 
-FTXUI `FetchContent`, mirroring TextFoundry's own root `CMakeLists.txt` pattern for the same library:
+FTXUI and CLI11 are resolved from the vcpkg manifest:
 
 ```cmake
 if(TEXTFOUNDRY_ENGINE_BUILD_CLI AND TEXTFOUNDRY_ENGINE_BUILD_OBJECTBOX_STORE)
   find_package(CLI11 CONFIG REQUIRED)
-
-  FetchContent_Declare(
-    ftxui
-    GIT_REPOSITORY https://github.com/ArthurSonzogni/ftxui.git
-    GIT_TAG v6.1.9
-  )
-  FetchContent_MakeAvailable(ftxui)
+  find_package(ftxui CONFIG REQUIRED)
 
   add_subdirectory(cli)
 endif()
@@ -202,6 +208,12 @@ add_executable(tfe
     main.cc
     app.cc
     app.h
+    command_catalog.cc
+    command_catalog.h
+    commands.cc
+    commands.h
+    completion.cc
+    completion.h
     dto.cc
     dto.h
     output.cc
@@ -215,22 +227,21 @@ target_link_libraries(tfe
         CLI11::CLI11
         ftxui::dom
         ftxui::screen
-        ftxui::util
         reflectcpp::reflectcpp
 )
 
 install(TARGETS tfe RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 ```
 
-(Exact FTXUI target names — `ftxui::dom`/`ftxui::screen`/`ftxui::util` vs. a combined target — confirmed against the fetched FTXUI's own `CMakeLists.txt` during plan-writing, the same way the `dom`-module-without-`ScreenInteractive` capability was confirmed earlier by reading FTXUI's real example source rather than assumed.)
+(The FTXUI vcpkg port exposes `ftxui::dom`, `ftxui::screen`, `ftxui::component`, and `ftxui::ftxui`; this CLI links only the `dom` and `screen` targets. The `dom`-module-without-`ScreenInteractive` capability was confirmed against FTXUI's installed headers and examples rather than assumed.)
 
 ### Global CLI Options
 
 Mirroring `EngineConfig`'s fields (`tf/engine.h`), since `tfe` constructs an `Engine` directly:
 
 ```
--d, --data <path>     Engine data path (default: platform-appropriate on-disk path, not memory:)
--p, --project <key>   Project key for namespacing (default: "default")
+    -d, --data <path>     Engine data path (default: platform-appropriate on-disk path, not memory:)
+-P, --project <key>   Project key for namespacing (default: "default")
     --strict           Strict mode (fail render on missing params)
     --json              JSON output instead of a table (see Section 2)
 ```
@@ -243,18 +254,19 @@ Considered and rejected: extracting a shared CLI-scaffolding library both binari
 
 ## Testing
 
-**File: `TextFoundryEngine/tests/cli_test_main.cc`** (new binary, gated behind `TEXTFOUNDRY_ENGINE_BUILD_CLI`, following the same split rationale as `core_tests`/`ai_tests` in TextFoundry: CLI tests need `textfoundry_objectbox_store` + CLI11 + FTXUI, so they don't belong in the base `core_tests` binary). Exact test list is written during plan-writing; must cover at minimum:
+**File: `TextFoundryEngine/tests/cli_test_main.cc`** (new binary, gated behind `TEXTFOUNDRY_ENGINE_BUILD_CLI`, following the same split rationale as `core_tests`/`ai_tests` in TextFoundry: CLI tests need `textfoundry_objectbox_store` + CLI11 + FTXUI, so they don't belong in the base `core_tests` binary). The test suite must cover at minimum:
 
 - DTO round-trip: a `CompositionDto` with a nested `Conditional` (branches + else) converts to a domain `Composition` whose `validate()` passes, and whose `Renderer::Render()` output differs across two `RenderContext`s — closing the loop from JSON input to rendered text.
 - DTO error path: a `Conditional` JSON missing `else_content` converts to a domain value that fails `validate()` with `MissingElseBranch`, surfaced through the CLI's error-output path (JSON error document, non-zero exit).
 - `comp create` flag-form and `--from-json` are mutually exclusive (CLI11 usage error, exit code `2`).
 - `--json` output for at least one `list` command and one single-entity command parses as valid JSON and matches the expected view struct shape.
 - Table-mode output for the same two commands produces non-empty stdout (rendering correctness beyond "non-empty" is not asserted — FTXUI's own layout is not this project's code to test).
+- Bash, Zsh, and Fish completion output contains the catalog's canonical commands and options.
 
 ## Explicitly Out of Scope
 
 - Any change to `TextFoundry`'s `src/text_foundry_cli`, `text_foundry_gui`, or `textfoundry_ai`.
 - AI-assisted commands (generation, revision, slicing, normalization, rewrite) — these depend on `textfoundry_ai`, which stays TextFoundry-only.
-- A `tui` subcommand or any interactive (FTXUI `component`-module) surface — `tfe` is non-interactive only, per the FTXUI `dom`-vs-`component` distinction already established.
+- A `tui` subcommand or any interactive (FTXUI `component`-module) surface — `tfe` is non-interactive in this release, per the FTXUI `dom`-vs-`component` distinction already established. FTXUI Component remains the next UI layer if an interactive workflow becomes valuable.
 - A generic reflection-driven table renderer — explicit per-command view structs and `ToTable` functions instead (see Section 2).
 - Editing an existing `Composition`/`Block` via `--from-json` (only `comp create` gains JSON input in this spec) — `comp` has no `update` command in `tf` today either (publishing a new version is the existing revision model), so there is nothing to extend.

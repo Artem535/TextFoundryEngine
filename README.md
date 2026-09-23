@@ -36,6 +36,39 @@ The library is split so a consumer that doesn't need storage doesn't pay for it:
 |---|---|---|
 | `TEXTFOUNDRY_ENGINE_BUILD_OBJECTBOX_STORE` | `ON` | Builds `textfoundry_objectbox_store` and fetches ObjectBox. Turn `OFF` to consume just `textfoundry_core` and supply your own repository implementations — no ObjectBox fetch or build at all. |
 | `TEXTFOUNDRY_ENGINE_BUILD_TESTS` | `ON` | Builds this repository's own test suite (`core_tests`, `doctest`-based). Turn `OFF` when consuming via `FetchContent` and your project doesn't already depend on `doctest`. |
+| `TEXTFOUNDRY_ENGINE_BUILD_CLI` | `ON` | Builds `tfe`, the standalone engine CLI. It is skipped automatically when the ObjectBox store is disabled. |
+
+## Standalone CLI (`tfe`)
+
+`tfe` is a non-interactive CLI for creating, publishing, inspecting, validating,
+and rendering engine assets. CLI11 handles parsing and validation; FTXUI DOM
+renders human-readable tables. Add `--json` anywhere in a command to get one
+machine-readable document on stdout.
+
+```bash
+# Use an on-disk data path so separate invocations share the same store.
+tfe --data .tfe-data block create greeting \
+  --template 'Hello, {{name}}!' --default name=World
+tfe --data .tfe-data comp create welcome --block greeting@1.0
+tfe --data .tfe-data render composition welcome --json
+
+# Short aliases: `b` is `block`, and `composition` is `comp`.
+tfe --data .tfe-data b list --json
+tfe --data .tfe-data composition list --json
+
+# Full nested compositions can be authored through --from-json or stdin.
+tfe --data .tfe-data comp create welcome --from-json composition.json --json
+
+# Install shell completion.
+eval "$(tfe completion bash)"
+source <(tfe completion zsh)
+tfe completion fish > ~/.config/fish/completions/tfe.fish
+```
+
+The CLI returns `0` on success, `1` for an engine/domain error, and `2` for a
+CLI usage error. In JSON mode, failures use the stable shape
+`{"error":{"code":"<ErrorCode name>","message":"<text>"}}`. The current release intentionally does not include an
+interactive TUI; FTXUI Component is reserved for a later `tfe tui` layer.
 
 ## Using it via FetchContent
 

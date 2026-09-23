@@ -12,7 +12,7 @@ permissions:
 env:
   VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.cache/vcpkg/archives
   VCPKG_DOWNLOADS: ${{ github.workspace }}/.cache/vcpkg/downloads
-  VCPKG_COMMIT: aa2d37682e3318d93aef87efa7b0e88e81cd3d59
+  VCPKG_COMMIT: 06da45aa49a5f988586cec6cf28eb1233ffca2af
 
 jobs:
   build:

@@ -1,8 +1,12 @@
 {
   "name": "textfoundry-engine",
   "version": "0.1.0",
-  "builtin-baseline": "aa2d37682e3318d93aef87efa7b0e88e81cd3d59",
+  "builtin-baseline": "06da45aa49a5f988586cec6cf28eb1233ffca2af",
   "dependencies": [
+    {
+      "name": "cli11",
+      "version>=": "2.6.1"
+    },
     {
       "name": "ctre",
       "version>=": "3.10.0"
@@ -18,6 +22,10 @@
     {
       "name": "spdlog",
       "version>=": "1.17.0"
+    },
+    {
+      "name": "ftxui",
+      "version>=": "7.0.0"
     }
   ]
 }

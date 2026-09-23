@@ -363,7 +363,19 @@ inline Condition GenericToCondition(const rfl::Generic& generic) {
   Condition condition;
   auto obj = generic.to_object().value();
   condition.attribute = obj.get("attribute").value().to_string().value();
-  for (const auto& v : obj.get("allowedValues").value().to_array().value()) {
+  // Materialize into a named Array before looping: obj.get(...).value() is a
+  // reference into a temporary rfl::Result, and to_array().value() is again a
+  // reference into a second temporary Result wrapping the array. Iterating
+  // the chain directly as a range-for's range-expression leaves the loop's
+  // hidden `auto&& __range` bound to a subobject of a temporary that is
+  // destroyed at the end of that statement (reference lifetime extension
+  // does not propagate through a function call returning a reference) --
+  // real UB that read as fine under GCC 15 locally but reliably corrupted
+  // this exact data in CI under GCC 13 (see engine.cc /
+  // NormalizeComposition and cli_dto_test.cc's DTO round-trip crashing with
+  // std::bad_array_new_length / std::bad_alloc deep inside GenericToBranch).
+  const auto allowedValues = obj.get("allowedValues").value().to_array().value();
+  for (const auto& v : allowedValues) {
     condition.allowedValues.insert(v.to_string().value());
   }
   condition.negate = obj.get("negate").value().to_bool().value();
@@ -388,10 +400,13 @@ inline rfl::Generic BranchToGeneric(const Branch& branch) {
 inline Branch GenericToBranch(const rfl::Generic& generic) {
   Branch branch;
   auto obj = generic.to_object().value();
-  for (const auto& c : obj.get("conditions").value().to_array().value()) {
+  // See the comment in GenericToCondition: materialize before looping.
+  const auto conditions = obj.get("conditions").value().to_array().value();
+  for (const auto& c : conditions) {
     branch.conditions.push_back(GenericToCondition(c));
   }
-  for (const auto& f : obj.get("content").value().to_array().value()) {
+  const auto content = obj.get("content").value().to_array().value();
+  for (const auto& f : content) {
     branch.content.push_back(GenericToFragment(f));
   }
   return branch;
@@ -419,13 +434,16 @@ inline rfl::Generic ConditionalToGeneric(const Conditional& cond) {
 inline Conditional GenericToConditional(const rfl::Generic& generic) {
   Conditional cond;
   auto obj = generic.to_object().value();
-  for (const auto& b : obj.get("branches").value().to_array().value()) {
+  // See the comment in GenericToCondition: materialize before looping.
+  const auto branches = obj.get("branches").value().to_array().value();
+  for (const auto& b : branches) {
     cond.branches.push_back(GenericToBranch(b));
   }
   auto elseGeneric = obj.get("elseContent").value();
   if (!elseGeneric.is_null()) {
     std::vector<Fragment> elseContent;
-    for (const auto& f : elseGeneric.to_array().value()) {
+    const auto elseArray = elseGeneric.to_array().value();
+    for (const auto& f : elseArray) {
       elseContent.push_back(GenericToFragment(f));
     }
     cond.elseContent = std::move(elseContent);
