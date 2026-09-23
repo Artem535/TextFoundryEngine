@@ -1137,38 +1137,16 @@ Result<NormalizedCompositionPreview> Engine::PreviewNormalizeComposition(
     if (!existing.HasError() && existing.value().GetStyleProfile().has_value() &&
         StyleKey(existing.value().GetStyleProfile()->semantic) ==
             StyleKey(request.style)) {
-      std::vector<std::string> fragment_texts;
-      fragment_texts.reserve(existing.value().fragments().size());
-      for (const auto& fragment : existing.value().fragments()) {
-        if (fragment.IsSeparator()) {
-          fragment_texts.push_back(fragment.AsSeparator().toString());
-          continue;
-        }
-        if (fragment.IsStaticText()) {
-          fragment_texts.push_back(fragment.AsStaticText().text());
-          continue;
-        }
-        if (fragment.IsConditional()) {
-          return Result<NormalizedCompositionPreview>(
-              Error{ErrorCode::InvalidParamType,
-                    "Normalization does not yet support compositions "
-                    "containing Conditional content"});
-        }
-        const auto& block_ref = fragment.AsBlockRef();
-        auto block_result = block_ref.version().has_value()
-                                ? LoadBlock(block_ref.GetBlockId(),
-                                            *block_ref.version())
-                                : LoadBlock(block_ref.GetBlockId());
-        if (block_result.HasError()) {
-          return Result<NormalizedCompositionPreview>(block_result.error());
-        }
-        fragment_texts.push_back(block_result.value().templ().Content());
+      const auto style = EffectiveStyle(existing.value());
+      auto fragment_texts =
+          FragmentTreeToPreviewText(existing.value().fragments(), style.delimiter);
+      if (fragment_texts.HasError()) {
+        return Result<NormalizedCompositionPreview>(fragment_texts.error());
       }
 
       return Result<NormalizedCompositionPreview>(NormalizedCompositionPreview{
           .composition_id = derived_composition_id,
-          .preview_text =
-              ApplyStructuralStyle(fragment_texts, EffectiveStyle(existing.value())),
+          .preview_text = ApplyStructuralStyle(fragment_texts.value(), style),
           .rewritten_blocks = {},
       });
     }

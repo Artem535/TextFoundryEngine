@@ -124,6 +124,7 @@ class FakeBlockNormalizer final : public IBlockNormalizer {
 
   [[nodiscard]] Result<NormalizedBlockData> NormalizeBlock(
       const BlockNormalizationRequest&) const override {
+    ++call_count_;
     if (result_.HasError()) {
       return Result<NormalizedBlockData>(result_.error());
     }
@@ -132,9 +133,16 @@ class FakeBlockNormalizer final : public IBlockNormalizer {
 
   [[nodiscard]] std::string Fingerprint() const override { return fingerprint_; }
 
+  /**
+   * Number of times NormalizeBlock has been called. Lets a test assert
+   * that a cache-reuse path made zero additional LLM-backed calls.
+   */
+  [[nodiscard]] int call_count() const noexcept { return call_count_; }
+
  private:
   Result<NormalizedBlockData> result_;
   std::string fingerprint_;
+  mutable int call_count_ = 0;
 };
 
 }  // namespace
@@ -641,6 +649,83 @@ TEST_SUITE("CompositionNormalization") {
     CHECK(text.find("fallback") != std::string::npos);
     CHECK(text.find("hello") < text.find("casual text"));
     CHECK(text.find("casual text") < text.find("fallback"));
+  }
+
+  TEST_CASE(
+      "PreviewNormalizeComposition's reuse_cached_blocks fast path shows "
+      "Conditional branches without calling the block normalizer again") {
+    EngineTestFixture fixture;
+
+    Block expert_block =
+        fixture.createAndPublishBlock("role.expert", "Expert guide.");
+
+    auto cond =
+        ConditionalBuilder()
+            .If(Condition{.attribute = "level", .allowedValues = {"expert"}})
+            .Then(Fragment::MakeBlockRef(
+                BlockRef("role.expert", expert_block.version())))
+            .Else(Fragment::MakeStaticText("fallback text"))
+            .build();
+
+    CompositionDraftBuilder composition_builder("prompt.cond_cache");
+    composition_builder.AddConditional(std::move(cond));
+    auto composition = fixture.engine.PublishComposition(
+        composition_builder.build(), Version{1, 0});
+    REQUIRE(composition.HasValue());
+
+    auto fake_normalizer = std::make_shared<FakeBlockNormalizer>(
+        Result<NormalizedBlockData>(NormalizedBlockData{
+            .templ = "Normalized expert guide.",
+            .description = std::nullopt,
+            .language = std::nullopt,
+        }));
+    fixture.engine.SetBlockNormalizer(fake_normalizer);
+
+    CompositionNormalizationRequest request{
+        .source_composition_id = "prompt.cond_cache",
+        .style = SemanticStyle{.tone = std::string("warm")},
+        .reuse_cached_blocks = true,
+    };
+
+    // First preview: no derived block and no derivative composition exist
+    // yet, so this goes through the fresh path and calls the normalizer
+    // exactly once (for the one BlockRef in the tree).
+    auto first_preview = fixture.engine.PreviewNormalizeComposition(request);
+    REQUIRE(first_preview.HasValue());
+    CHECK(fake_normalizer->call_count() == 1);
+    CHECK(first_preview.value().preview_text.find("Normalized expert guide.") !=
+          std::string::npos);
+    CHECK(first_preview.value().preview_text.find("fallback text") !=
+          std::string::npos);
+    CHECK(first_preview.value().preview_text.find("[if level in {expert}]") !=
+          std::string::npos);
+    CHECK(first_preview.value().preview_text.find("[else]") != std::string::npos);
+
+    // PreviewNormalizeComposition never publishes a derivative composition
+    // itself (only NormalizeComposition does) -- publish one now so the
+    // second preview call below has something to find in its
+    // composition-level cache check. The block-level cache (checked by
+    // NormalizeFragments inside this call) already has "norm.role.expert"
+    // tagged from the first preview above, so this does NOT call the
+    // normalizer again.
+    auto normalize_result = fixture.engine.NormalizeComposition(request);
+    REQUIRE(normalize_result.HasValue());
+    CHECK(fake_normalizer->call_count() == 1);
+
+    // Second preview: the derivative composition now exists with a
+    // matching style, so this takes the reuse_cached_blocks fast path --
+    // reading straight from the stored, already-normalized Conditional via
+    // FragmentTreeToPreviewText, with zero further normalizer calls.
+    auto second_preview = fixture.engine.PreviewNormalizeComposition(request);
+    REQUIRE(second_preview.HasValue());
+    CHECK(second_preview.value().preview_text.find("Normalized expert guide.") !=
+          std::string::npos);
+    CHECK(second_preview.value().preview_text.find("fallback text") !=
+          std::string::npos);
+    CHECK(second_preview.value().preview_text.find("[if level in {expert}]") !=
+          std::string::npos);
+    CHECK(second_preview.value().preview_text.find("[else]") != std::string::npos);
+    CHECK(fake_normalizer->call_count() == 1);
   }
 }
 
