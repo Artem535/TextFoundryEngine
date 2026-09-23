@@ -591,6 +591,57 @@ TEST_SUITE("CompositionNormalization") {
 
     CHECK(expert_render.value().text != fallback_render.value().text);
   }
+
+  TEST_CASE(
+      "PreviewNormalizeComposition renders a Conditional as a labeled "
+      "if/elif/else block") {
+    EngineTestFixture fixture;
+
+    auto cond =
+        ConditionalBuilder()
+            .If(Condition{.attribute = "language",
+                          .allowedValues = {"ru", "en"}})
+            .Then(Fragment::MakeStaticText("hello"))
+            .If(Condition{.attribute = "tone",
+                          .allowedValues = {"formal"},
+                          .negate = true})
+            .Then(Fragment::MakeStaticText("casual text"))
+            .Else(Fragment::MakeStaticText("fallback"))
+            .build();
+
+    CompositionDraftBuilder composition_builder("prompt.cond_preview");
+    composition_builder.AddConditional(std::move(cond));
+    auto composition = fixture.engine.PublishComposition(
+        composition_builder.build(), Version{1, 0});
+    REQUIRE(composition.HasValue());
+
+    fixture.engine.SetBlockNormalizer(std::make_shared<FakeBlockNormalizer>(
+        Result<NormalizedBlockData>(NormalizedBlockData{
+            .templ = "unused",
+            .description = std::nullopt,
+            .language = std::nullopt,
+        })));
+
+    auto preview = fixture.engine.PreviewNormalizeComposition(
+        CompositionNormalizationRequest{
+            .source_composition_id = "prompt.cond_preview",
+            .style = SemanticStyle{.tone = std::string("warm")},
+        });
+    REQUIRE(preview.HasValue());
+
+    const std::string& text = preview.value().preview_text;
+    // allowedValues is an unordered_set, so a two-value set's rendered
+    // order isn't guaranteed -- accept either.
+    CHECK((text.find("[if language in {ru, en}]") != std::string::npos ||
+          text.find("[if language in {en, ru}]") != std::string::npos));
+    CHECK(text.find("hello") != std::string::npos);
+    CHECK(text.find("[elif tone not in {formal}]") != std::string::npos);
+    CHECK(text.find("casual text") != std::string::npos);
+    CHECK(text.find("[else]") != std::string::npos);
+    CHECK(text.find("fallback") != std::string::npos);
+    CHECK(text.find("hello") < text.find("casual text"));
+    CHECK(text.find("casual text") < text.find("fallback"));
+  }
 }
 
 // ==================== BlockType Tests ====================
