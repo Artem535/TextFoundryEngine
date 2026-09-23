@@ -398,6 +398,8 @@ const obx::Property<ObxFragment, OBXPropertyType_String> ObxFragment_::refLocalP
 const obx::Property<ObxFragment, OBXPropertyType_String> ObxFragment_::staticContent(10);
 const obx::Property<ObxFragment, OBXPropertyType_Byte> ObxFragment_::separatorType(11);
 const obx::Property<ObxFragment, OBXPropertyType_String> ObxFragment_::conditionalJson(12);
+const obx::Property<ObxFragment, OBXPropertyType_String> ObxFragment_::groupJson(13);
+const obx::Property<ObxFragment, OBXPropertyType_String> ObxFragment_::blockElementJson(14);
 
 void ObxFragment::_OBX_MetaInfo::toFlatBuffer(flatbuffers::FlatBufferBuilder& fbb, const ObxFragment& object) {
     fbb.Clear();
@@ -405,6 +407,8 @@ void ObxFragment::_OBX_MetaInfo::toFlatBuffer(flatbuffers::FlatBufferBuilder& fb
     auto offsetrefLocalParamsJson = fbb.CreateString(object.refLocalParamsJson);
     auto offsetstaticContent = fbb.CreateString(object.staticContent);
     auto offsetconditionalJson = fbb.CreateString(object.conditionalJson);
+    auto offsetgroupJson = fbb.CreateString(object.groupJson);
+    auto offsetblockElementJson = fbb.CreateString(object.blockElementJson);
     flatbuffers::uoffset_t fbStart = fbb.StartTable();
     fbb.AddElement(4, object.id);
     fbb.AddElement(6, object.compositionId);
@@ -418,6 +422,8 @@ void ObxFragment::_OBX_MetaInfo::toFlatBuffer(flatbuffers::FlatBufferBuilder& fb
     fbb.AddOffset(22, offsetstaticContent);
     fbb.AddElement(24, object.separatorType);
     fbb.AddOffset(26, offsetconditionalJson);
+    fbb.AddOffset(28, offsetgroupJson);
+    fbb.AddOffset(30, offsetblockElementJson);
     flatbuffers::Offset<flatbuffers::Table> offset;
     offset.o = fbb.EndTable(fbStart);
     fbb.Finish(offset);
@@ -476,6 +482,22 @@ void ObxFragment::_OBX_MetaInfo::fromFlatBuffer(const void* data, size_t, ObxFra
             outObject.conditionalJson.assign(ptr->c_str(), ptr->size());
         } else {
             outObject.conditionalJson.clear();
+        }
+    }
+    {
+        auto* ptr = table->GetPointer<const flatbuffers::String*>(28);
+        if (ptr) {
+            outObject.groupJson.assign(ptr->c_str(), ptr->size());
+        } else {
+            outObject.groupJson.clear();
+        }
+    }
+    {
+        auto* ptr = table->GetPointer<const flatbuffers::String*>(30);
+        if (ptr) {
+            outObject.blockElementJson.assign(ptr->c_str(), ptr->size());
+        } else {
+            outObject.blockElementJson.clear();
         }
     }
 }

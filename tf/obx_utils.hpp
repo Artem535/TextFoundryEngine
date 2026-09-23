@@ -154,7 +154,7 @@ inline int8_t SeparatorTypeToObxSeparatorType(SeparatorType type) {
 
 /**
  * Convert ObxFragment fragment type (int8_t) to FragmentType enum
- * 0=BlockRef, 1=StaticText, 2=Separator, 3=Conditional
+ * 0=BlockRef, 1=StaticText, 2=Separator, 3=Conditional, 4=Group, 5=BlockElement
  */
 inline FragmentType ObxFragmentTypeToFragmentType(int8_t type) {
   switch (type) {
@@ -166,6 +166,10 @@ inline FragmentType ObxFragmentTypeToFragmentType(int8_t type) {
       return FragmentType::Separator;
     case 3:
       return FragmentType::Conditional;
+    case 4:
+      return FragmentType::Group;
+    case 5:
+      return FragmentType::BlockElement;
     default:
       return FragmentType::StaticText;
   }
@@ -184,6 +188,10 @@ inline int8_t FragmentTypeToObxFragmentType(FragmentType type) {
       return 2;
     case FragmentType::Conditional:
       return 3;
+    case FragmentType::Group:
+      return 4;
+    case FragmentType::BlockElement:
+      return 5;
   }
   return 1;  // StaticText as default
 }
@@ -451,6 +459,102 @@ inline Conditional GenericToConditional(const rfl::Generic& generic) {
   return cond;
 }
 
+inline rfl::Generic GroupToGeneric(const Group& group) {
+  rfl::Generic::Object obj;
+  obj["kind"] = std::string(group.kind == GroupKind::Numbered ? "numbered"
+                                                              : "bulleted");
+  rfl::Generic::Array items;
+  for (const auto& item : group.items) {
+    rfl::Generic::Array itemFragments;
+    for (const auto& fragment : item) {
+      itemFragments.emplace_back(FragmentToGeneric(fragment));
+    }
+    items.emplace_back(itemFragments);
+  }
+  obj["items"] = items;
+  return obj;
+}
+
+inline Group GenericToGroup(const rfl::Generic& generic) {
+  Group group;
+  auto obj = generic.to_object().value();
+  const auto kindStr = obj.get("kind").value().to_string().value();
+  group.kind = (kindStr == "numbered") ? GroupKind::Numbered : GroupKind::Bulleted;
+  // Materialize before looping: see the comment in GenericToCondition for
+  // why this isn't optional (a real GCC-13-only UB bug was already hit once
+  // in this exact file for the analogous Conditional/Branch path).
+  const auto items = obj.get("items").value().to_array().value();
+  for (const auto& itemGeneric : items) {
+    const auto itemFragments = itemGeneric.to_array().value();
+    std::vector<Fragment> item;
+    for (const auto& f : itemFragments) {
+      item.push_back(GenericToFragment(f));
+    }
+    group.items.push_back(std::move(item));
+  }
+  return group;
+}
+
+inline rfl::Generic BlockElementToGeneric(const BlockElement& element) {
+  rfl::Generic::Object obj;
+  std::string kindStr;
+  switch (element.kind) {
+    case BlockElementKind::Heading:
+      kindStr = "heading";
+      break;
+    case BlockElementKind::Quote:
+      kindStr = "quote";
+      break;
+    case BlockElementKind::CodeBlock:
+      kindStr = "code_block";
+      break;
+  }
+  obj["kind"] = kindStr;
+  obj["attr"] = element.attr;
+  rfl::Generic::Array content;
+  for (const auto& fragment : element.content) {
+    content.emplace_back(FragmentToGeneric(fragment));
+  }
+  obj["content"] = content;
+  return obj;
+}
+
+inline BlockElement GenericToBlockElement(const rfl::Generic& generic) {
+  BlockElement element;
+  auto obj = generic.to_object().value();
+  const auto kindStr = obj.get("kind").value().to_string().value();
+  if (kindStr == "heading") {
+    element.kind = BlockElementKind::Heading;
+  } else if (kindStr == "code_block") {
+    element.kind = BlockElementKind::CodeBlock;
+  } else {
+    element.kind = BlockElementKind::Quote;
+  }
+  element.attr = obj.get("attr").value().to_string().value();
+  // Materialize before looping -- see GenericToGroup above.
+  const auto content = obj.get("content").value().to_array().value();
+  for (const auto& f : content) {
+    element.content.push_back(GenericToFragment(f));
+  }
+  return element;
+}
+
+inline std::string GroupToJson(const Group& group) {
+  return rfl::json::write(GroupToGeneric(group));
+}
+
+inline Group JsonToGroup(const std::string& json) {
+  return GenericToGroup(rfl::json::read<rfl::Generic>(json).value());
+}
+
+inline std::string BlockElementToJson(const BlockElement& element) {
+  return rfl::json::write(BlockElementToGeneric(element));
+}
+
+inline BlockElement JsonToBlockElement(const std::string& json) {
+  return GenericToBlockElement(rfl::json::read<rfl::Generic>(json).value());
+}
+
 inline rfl::Generic FragmentToGeneric(const Fragment& fragment) {
   rfl::Generic::Object obj;
   switch (fragment.type()) {
@@ -483,6 +587,16 @@ inline rfl::Generic FragmentToGeneric(const Fragment& fragment) {
     case FragmentType::Conditional: {
       obj["type"] = std::string("conditional");
       obj["conditional"] = ConditionalToGeneric(fragment.AsConditional());
+      break;
+    }
+    case FragmentType::Group: {
+      obj["type"] = std::string("group");
+      obj["group"] = GroupToGeneric(fragment.AsGroup());
+      break;
+    }
+    case FragmentType::BlockElement: {
+      obj["type"] = std::string("block_element");
+      obj["blockElement"] = BlockElementToGeneric(fragment.AsBlockElement());
       break;
     }
   }
@@ -524,6 +638,15 @@ inline Fragment GenericToFragment(const rfl::Generic& generic) {
   if (type == "conditional") {
     return Fragment::MakeConditional(
         GenericToConditional(obj.get("conditional").value()));
+  }
+
+  if (type == "group") {
+    return Fragment::MakeGroup(GenericToGroup(obj.get("group").value()));
+  }
+
+  if (type == "block_element") {
+    return Fragment::MakeBlockElement(
+        GenericToBlockElement(obj.get("blockElement").value()));
   }
 
   // Fallback, matches ObxFragmentToFragment's own unknown-type fallback.
@@ -578,6 +701,14 @@ inline Fragment ObxFragmentToFragment(const ObxFragment& obxFrag) {
       return Fragment::MakeConditional(
           JsonToConditional(obxFrag.conditionalJson));
     }
+
+    case FragmentType::Group: {
+      return Fragment::MakeGroup(JsonToGroup(obxFrag.groupJson));
+    }
+
+    case FragmentType::BlockElement: {
+      return Fragment::MakeBlockElement(JsonToBlockElement(obxFrag.blockElementJson));
+    }
   }
 
   // Fallback
@@ -626,6 +757,16 @@ inline ObxFragment fragment_to_obx_fragment(const Fragment& fragment,
 
     case FragmentType::Conditional: {
       obxFrag.conditionalJson = ConditionalToJson(fragment.AsConditional());
+      break;
+    }
+
+    case FragmentType::Group: {
+      obxFrag.groupJson = GroupToJson(fragment.AsGroup());
+      break;
+    }
+
+    case FragmentType::BlockElement: {
+      obxFrag.blockElementJson = BlockElementToJson(fragment.AsBlockElement());
       break;
     }
   }

@@ -1274,6 +1274,82 @@ TEST_SUITE("StructuralFragmentBlockRefVisiting") {
   }
 }
 
+TEST_SUITE("StructuralFragmentPersistence") {
+  TEST_CASE_FIXTURE(EngineTestFixture,
+                    "a nested Group survives an ObjectBox store+load round trip") {
+    CompositionDraftBuilder builder("group.roundtrip");
+    Group inner{.kind = GroupKind::Numbered,
+               .items = {{Fragment::MakeStaticText("inner one")},
+                         {Fragment::MakeStaticText("inner two")}}};
+    Group outer{.kind = GroupKind::Bulleted,
+               .items = {{Fragment::MakeStaticText("outer text")},
+                         {Fragment::MakeGroup(std::move(inner))}}};
+    builder.AddGroup(std::move(outer));
+    auto pubResult = engine.PublishComposition(builder.build(), Engine::VersionBump::Minor);
+    REQUIRE(pubResult.HasValue());
+
+    auto loaded = engine.LoadComposition("group.roundtrip");
+    REQUIRE(loaded.HasValue());
+    REQUIRE(loaded.value().fragmentCount() == 1);
+    REQUIRE(loaded.value().fragment(0).IsGroup());
+
+    const Group& loadedOuter = loaded.value().fragment(0).AsGroup();
+    CHECK(loadedOuter.kind == GroupKind::Bulleted);
+    REQUIRE(loadedOuter.items.size() == 2);
+    REQUIRE(loadedOuter.items[0].size() == 1);
+    CHECK(loadedOuter.items[0][0].AsStaticText().text() == "outer text");
+    REQUIRE(loadedOuter.items[1].size() == 1);
+    REQUIRE(loadedOuter.items[1][0].IsGroup());
+
+    const Group& loadedInner = loadedOuter.items[1][0].AsGroup();
+    CHECK(loadedInner.kind == GroupKind::Numbered);
+    REQUIRE(loadedInner.items.size() == 2);
+    CHECK(loadedInner.items[0][0].AsStaticText().text() == "inner one");
+    CHECK(loadedInner.items[1][0].AsStaticText().text() == "inner two");
+  }
+
+  TEST_CASE_FIXTURE(EngineTestFixture,
+                    "each BlockElementKind survives an ObjectBox store+load round trip") {
+    CompositionDraftBuilder builder("block_element.roundtrip");
+    builder.AddBlockElement(
+        BlockElement{.kind = BlockElementKind::Heading,
+                    .attr = "2",
+                    .content = {Fragment::MakeStaticText("a heading")}});
+    builder.AddBlockElement(
+        BlockElement{.kind = BlockElementKind::Quote,
+                    .attr = "",
+                    .content = {Fragment::MakeStaticText("a quote")}});
+    builder.AddBlockElement(
+        BlockElement{.kind = BlockElementKind::CodeBlock,
+                    .attr = "cpp",
+                    .content = {Fragment::MakeStaticText("int x = 1;")}});
+    auto pubResult = engine.PublishComposition(builder.build(), Engine::VersionBump::Minor);
+    REQUIRE(pubResult.HasValue());
+
+    auto loaded = engine.LoadComposition("block_element.roundtrip");
+    REQUIRE(loaded.HasValue());
+    REQUIRE(loaded.value().fragmentCount() == 3);
+
+    REQUIRE(loaded.value().fragment(0).IsBlockElement());
+    const BlockElement& heading = loaded.value().fragment(0).AsBlockElement();
+    CHECK(heading.kind == BlockElementKind::Heading);
+    CHECK(heading.attr == "2");
+    REQUIRE(heading.content.size() == 1);
+    CHECK(heading.content[0].AsStaticText().text() == "a heading");
+
+    REQUIRE(loaded.value().fragment(1).IsBlockElement());
+    const BlockElement& quote = loaded.value().fragment(1).AsBlockElement();
+    CHECK(quote.kind == BlockElementKind::Quote);
+    CHECK(quote.content[0].AsStaticText().text() == "a quote");
+
+    REQUIRE(loaded.value().fragment(2).IsBlockElement());
+    const BlockElement& code = loaded.value().fragment(2).AsBlockElement();
+    CHECK(code.kind == BlockElementKind::CodeBlock);
+    CHECK(code.attr == "cpp");
+    CHECK(code.content[0].AsStaticText().text() == "int x = 1;");
+  }
+}
+
 TEST_SUITE("ConditionalRendering") {
   TEST_CASE_FIXTURE(EngineTestFixture, "first matching branch wins among 3+ branches") {
     createAndPublishBlock("cond.expert", "expert content");
