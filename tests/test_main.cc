@@ -391,18 +391,173 @@ TEST_SUITE("CompositionNormalization") {
   }
 
   TEST_CASE(
-      "NormalizeComposition rejects Conditional content, consistent with "
-      "PreviewNormalizeComposition") {
+      "NormalizeComposition recurses into Conditional branches and "
+      "elseContent, rewriting nested BlockRefs and leaving nested "
+      "StaticText in place (normalize_static_text defaults to false)") {
     EngineTestFixture fixture;
 
-    auto cond = ConditionalBuilder()
-                    .If(Condition{.attribute = "level",
-                                  .allowedValues = {"expert"}})
-                    .Then(Fragment::MakeStaticText("expert text"))
-                    .Else(Fragment::MakeStaticText("default text"))
-                    .build();
+    Block expert_block =
+        fixture.createAndPublishBlock("role.expert", "You are an expert.");
+    Block beginner_block =
+        fixture.createAndPublishBlock("role.beginner", "You are a beginner guide.");
+
+    auto cond =
+        ConditionalBuilder()
+            .If(Condition{.attribute = "level", .allowedValues = {"none"}})
+            .Then(Fragment::MakeStaticText("no particular expertise"))
+            .If(Condition{.attribute = "level", .allowedValues = {"expert"}})
+            .Then(Fragment::MakeBlockRef(
+                BlockRef("role.expert", expert_block.version())))
+            .Else(Fragment::MakeBlockRef(
+                BlockRef("role.beginner", beginner_block.version())))
+            .build();
 
     CompositionDraftBuilder composition_builder("prompt.cond");
+    composition_builder.AddConditional(std::move(cond));
+    auto composition = fixture.engine.PublishComposition(
+        composition_builder.build(), Version{1, 0});
+    REQUIRE(composition.HasValue());
+
+    fixture.engine.SetBlockNormalizer(std::make_shared<FakeBlockNormalizer>(
+        Result<NormalizedBlockData>(NormalizedBlockData{
+            .templ = "normalized role text",
+            .description = std::nullopt,
+            .language = std::nullopt,
+        })));
+
+    auto result = fixture.engine.NormalizeComposition(
+        CompositionNormalizationRequest{
+            .source_composition_id = "prompt.cond",
+            .style = SemanticStyle{.tone = std::string("warm")},
+        });
+    REQUIRE(result.HasValue());
+
+    auto normalized_comp =
+        fixture.engine.LoadComposition(result.value().composition_id);
+    REQUIRE(normalized_comp.HasValue());
+    REQUIRE(normalized_comp.value().fragmentCount() == 1);
+    REQUIRE(normalized_comp.value().fragment(0).IsConditional());
+
+    const Conditional& normalized_cond =
+        normalized_comp.value().fragment(0).AsConditional();
+    REQUIRE(normalized_cond.branches.size() == 2);
+
+    REQUIRE(normalized_cond.branches[0].content.size() == 1);
+    REQUIRE(normalized_cond.branches[0].content[0].IsStaticText());
+    CHECK(normalized_cond.branches[0].content[0].AsStaticText().text() ==
+          "no particular expertise");
+
+    REQUIRE(normalized_cond.branches[1].content.size() == 1);
+    REQUIRE(normalized_cond.branches[1].content[0].IsBlockRef());
+    const auto& normalized_expert_ref =
+        normalized_cond.branches[1].content[0].AsBlockRef();
+    CHECK(normalized_expert_ref.GetBlockId() == "norm.role.expert");
+    auto normalized_expert_block = fixture.engine.LoadBlock(
+        normalized_expert_ref.GetBlockId(), *normalized_expert_ref.version());
+    REQUIRE(normalized_expert_block.HasValue());
+    CHECK(normalized_expert_block.value().templ().Content() ==
+          "normalized role text");
+
+    REQUIRE(normalized_cond.elseContent.has_value());
+    REQUIRE(normalized_cond.elseContent->size() == 1);
+    REQUIRE((*normalized_cond.elseContent)[0].IsBlockRef());
+    CHECK((*normalized_cond.elseContent)[0].AsBlockRef().GetBlockId() ==
+          "norm.role.beginner");
+
+    REQUIRE(result.value().rewritten_blocks.size() == 2);
+    bool has_expert_rewrite = false;
+    bool has_beginner_rewrite = false;
+    for (const auto& [from, to] : result.value().rewritten_blocks) {
+      if (from == "role.expert" && to == "norm.role.expert") {
+        has_expert_rewrite = true;
+      }
+      if (from == "role.beginner" && to == "norm.role.beginner") {
+        has_beginner_rewrite = true;
+      }
+    }
+    CHECK(has_expert_rewrite);
+    CHECK(has_beginner_rewrite);
+  }
+
+  TEST_CASE(
+      "NormalizeComposition recurses through a Conditional nested inside "
+      "another Conditional's branch (two levels)") {
+    EngineTestFixture fixture;
+
+    auto inner_cond =
+        ConditionalBuilder()
+            .If(Condition{.attribute = "tone", .allowedValues = {"formal"}})
+            .Then(Fragment::MakeStaticText("formal inner text"))
+            .Else(Fragment::MakeStaticText("casual inner text"))
+            .build();
+
+    auto outer_cond =
+        ConditionalBuilder()
+            .If(Condition{.attribute = "level", .allowedValues = {"expert"}})
+            .Then(Fragment::MakeConditional(std::move(inner_cond)))
+            .Else(Fragment::MakeStaticText("outer else text"))
+            .build();
+
+    CompositionDraftBuilder composition_builder("prompt.nested_cond");
+    composition_builder.AddConditional(std::move(outer_cond));
+    auto composition = fixture.engine.PublishComposition(
+        composition_builder.build(), Version{1, 0});
+    REQUIRE(composition.HasValue());
+
+    // No BlockRef anywhere in this tree, but NormalizeComposition still
+    // requires a block normalizer to be configured before it does anything.
+    fixture.engine.SetBlockNormalizer(std::make_shared<FakeBlockNormalizer>(
+        Result<NormalizedBlockData>(NormalizedBlockData{
+            .templ = "unused",
+            .description = std::nullopt,
+            .language = std::nullopt,
+        })));
+
+    auto result = fixture.engine.NormalizeComposition(
+        CompositionNormalizationRequest{
+            .source_composition_id = "prompt.nested_cond",
+            .style = SemanticStyle{.tone = std::string("warm")},
+        });
+    REQUIRE(result.HasValue());
+
+    auto normalized_comp =
+        fixture.engine.LoadComposition(result.value().composition_id);
+    REQUIRE(normalized_comp.HasValue());
+    REQUIRE(normalized_comp.value().fragmentCount() == 1);
+    REQUIRE(normalized_comp.value().fragment(0).IsConditional());
+
+    const Conditional& outer = normalized_comp.value().fragment(0).AsConditional();
+    REQUIRE(outer.branches.size() == 1);
+    REQUIRE(outer.branches[0].content.size() == 1);
+    REQUIRE(outer.branches[0].content[0].IsConditional());
+
+    const Conditional& inner = outer.branches[0].content[0].AsConditional();
+    REQUIRE(inner.branches.size() == 1);
+    REQUIRE(inner.branches[0].content.size() == 1);
+    CHECK(inner.branches[0].content[0].AsStaticText().text() ==
+          "formal inner text");
+    REQUIRE(inner.elseContent.has_value());
+    REQUIRE(inner.elseContent->size() == 1);
+    CHECK((*inner.elseContent)[0].AsStaticText().text() == "casual inner text");
+
+    REQUIRE(outer.elseContent.has_value());
+    REQUIRE(outer.elseContent->size() == 1);
+    CHECK((*outer.elseContent)[0].AsStaticText().text() == "outer else text");
+  }
+
+  TEST_CASE(
+      "a Conditional composition normalizes, publishes, and renders "
+      "different branches for different RenderContexts") {
+    EngineTestFixture fixture;
+
+    auto cond =
+        ConditionalBuilder()
+            .If(Condition{.attribute = "level", .allowedValues = {"expert"}})
+            .Then(Fragment::MakeStaticText("expert guidance"))
+            .Else(Fragment::MakeStaticText("beginner guidance"))
+            .build();
+
+    CompositionDraftBuilder composition_builder("prompt.cond_render");
     composition_builder.AddConditional(std::move(cond));
     auto composition = fixture.engine.PublishComposition(
         composition_builder.build(), Version{1, 0});
@@ -415,13 +570,26 @@ TEST_SUITE("CompositionNormalization") {
             .language = std::nullopt,
         })));
 
-    auto result = fixture.engine.NormalizeComposition(
+    auto normalize_result = fixture.engine.NormalizeComposition(
         CompositionNormalizationRequest{
-            .source_composition_id = "prompt.cond",
+            .source_composition_id = "prompt.cond_render",
             .style = SemanticStyle{.tone = std::string("warm")},
         });
-    REQUIRE(result.HasError());
-    CHECK(result.error().code == ErrorCode::InvalidParamType);
+    REQUIRE(normalize_result.HasValue());
+
+    auto expert_render = fixture.engine.Render(
+        normalize_result.value().composition_id,
+        RenderContext{}.WithParam("level", "expert"));
+    REQUIRE(expert_render.HasValue());
+    CHECK(expert_render.value().text == "expert guidance");
+
+    auto fallback_render = fixture.engine.Render(
+        normalize_result.value().composition_id,
+        RenderContext{}.WithParam("level", "novice"));
+    REQUIRE(fallback_render.HasValue());
+    CHECK(fallback_render.value().text == "beginner guidance");
+
+    CHECK(expert_render.value().text != fallback_render.value().text);
   }
 }
 
