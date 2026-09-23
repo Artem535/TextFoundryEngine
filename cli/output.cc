@@ -83,6 +83,10 @@ std::string ErrorCodeName(tf::ErrorCode code) {
       return "EmptyBranchConditions";
     case tf::ErrorCode::MissingElseBranch:
       return "MissingElseBranch";
+    case tf::ErrorCode::EmptyGroup:
+      return "EmptyGroup";
+    case tf::ErrorCode::InvalidHeadingLevel:
+      return "InvalidHeadingLevel";
     case tf::ErrorCode::StorageError:
       return "StorageError";
     case tf::ErrorCode::Success:

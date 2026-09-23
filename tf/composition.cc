@@ -262,6 +262,19 @@ CompositionDraftBuilder& CompositionDraftBuilder::AddConditional(
   return *this;
 }
 
+CompositionDraftBuilder& CompositionDraftBuilder::AddGroup(Group group) {
+  comp_.InsertFragment(comp_.fragmentCount(),
+                       Fragment::MakeGroup(std::move(group)));
+  return *this;
+}
+
+CompositionDraftBuilder& CompositionDraftBuilder::AddBlockElement(
+    BlockElement element) {
+  comp_.InsertFragment(comp_.fragmentCount(),
+                       Fragment::MakeBlockElement(std::move(element)));
+  return *this;
+}
+
 CompositionDraft CompositionDraftBuilder::build() {
   return CompositionDraft(std::move(comp_));
 }

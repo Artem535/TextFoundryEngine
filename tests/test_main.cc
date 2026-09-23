@@ -1088,6 +1088,192 @@ TEST_SUITE("Conditional") {
   }
 }
 
+TEST_SUITE("Group") {
+  TEST_CASE("empty items is an error") {
+    Group group{.kind = GroupKind::Bulleted, .items = {}};
+    auto err = group.validate(false);
+    CHECK(err.is_error());
+    CHECK(err.code == ErrorCode::EmptyGroup);
+  }
+
+  TEST_CASE("an item with zero fragments is valid") {
+    Group group{.kind = GroupKind::Bulleted, .items = {{}}};
+    CHECK(group.validate(false).is_success());
+  }
+
+  TEST_CASE("a valid group with multiple items passes validation") {
+    Group group{
+        .kind = GroupKind::Numbered,
+        .items = {{Fragment::MakeStaticText("first")},
+                  {Fragment::MakeStaticText("second")}}};
+    CHECK(group.validate(false).is_success());
+  }
+
+  TEST_CASE("an invalid fragment nested in an item propagates its error") {
+    Conditional badCond;
+    badCond.elseContent = std::vector<Fragment>{};  // no branches -> EmptyConditional
+    Group group{.kind = GroupKind::Bulleted,
+               .items = {{Fragment::MakeConditional(std::move(badCond))}}};
+
+    auto err = group.validate(false);
+    CHECK(err.is_error());
+    CHECK(err.code == ErrorCode::EmptyConditional);
+  }
+
+  TEST_CASE("Fragment::validate propagates a bad Group's error") {
+    Group group{.kind = GroupKind::Bulleted, .items = {}};
+    Fragment f = Fragment::MakeGroup(std::move(group));
+    auto err = f.validate(false);
+    CHECK(err.is_error());
+    CHECK(err.code == ErrorCode::EmptyGroup);
+  }
+
+  TEST_CASE("Composition::validate propagates a nested Group's error") {
+    Composition comp("test.group.invalid");
+    Group group{.kind = GroupKind::Bulleted, .items = {}};
+    comp.InsertFragment(0, Fragment::MakeGroup(std::move(group)));
+
+    auto err = comp.validate();
+    CHECK(err.is_error());
+    CHECK(err.code == ErrorCode::EmptyGroup);
+  }
+}
+
+TEST_SUITE("GroupBuilder") {
+  TEST_CASE("Item(vector<Fragment>) and Item(Fragment) build the expected items") {
+    auto group = GroupBuilder(GroupKind::Numbered)
+                     .Item(Fragment::MakeStaticText("single"))
+                     .Item(std::vector<Fragment>{Fragment::MakeStaticText("a"),
+                                                 Fragment::MakeStaticText("b")})
+                     .build();
+
+    REQUIRE(group.kind == GroupKind::Numbered);
+    REQUIRE(group.items.size() == 2);
+    REQUIRE(group.items[0].size() == 1);
+    CHECK(group.items[0][0].AsStaticText().text() == "single");
+    REQUIRE(group.items[1].size() == 2);
+    CHECK(group.items[1][0].AsStaticText().text() == "a");
+    CHECK(group.items[1][1].AsStaticText().text() == "b");
+  }
+}
+
+TEST_SUITE("BlockElement") {
+  TEST_CASE("Heading accepts levels 1 through 6") {
+    for (const std::string& level : {"1", "2", "3", "4", "5", "6"}) {
+      BlockElement element{.kind = BlockElementKind::Heading,
+                           .attr = level,
+                           .content = {Fragment::MakeStaticText("text")}};
+      CHECK(element.validate(false).is_success());
+    }
+  }
+
+  TEST_CASE("Heading rejects out-of-range or malformed levels") {
+    for (const std::string& level : {"0", "7", "abc", "", "1.5", " 1"}) {
+      BlockElement element{.kind = BlockElementKind::Heading,
+                           .attr = level,
+                           .content = {}};
+      auto err = element.validate(false);
+      CHECK(err.is_error());
+      CHECK(err.code == ErrorCode::InvalidHeadingLevel);
+    }
+  }
+
+  TEST_CASE("Quote and CodeBlock accept any attr, including empty") {
+    BlockElement quote{.kind = BlockElementKind::Quote, .attr = "", .content = {}};
+    CHECK(quote.validate(false).is_success());
+
+    BlockElement code{.kind = BlockElementKind::CodeBlock, .attr = "", .content = {}};
+    CHECK(code.validate(false).is_success());
+
+    BlockElement codeWithLang{
+        .kind = BlockElementKind::CodeBlock, .attr = "cpp", .content = {}};
+    CHECK(codeWithLang.validate(false).is_success());
+  }
+
+  TEST_CASE("an invalid fragment nested in content propagates its error") {
+    Conditional badCond;
+    badCond.elseContent = std::vector<Fragment>{};  // no branches -> EmptyConditional
+    BlockElement element{.kind = BlockElementKind::Quote,
+                         .attr = "",
+                         .content = {Fragment::MakeConditional(std::move(badCond))}};
+
+    auto err = element.validate(false);
+    CHECK(err.is_error());
+    CHECK(err.code == ErrorCode::EmptyConditional);
+  }
+
+  TEST_CASE("Fragment::validate propagates a bad BlockElement's error") {
+    Fragment f = Fragment::MakeHeading(7, {});
+    auto err = f.validate(false);
+    CHECK(err.is_error());
+    CHECK(err.code == ErrorCode::InvalidHeadingLevel);
+  }
+
+  TEST_CASE("MakeHeading/MakeQuote/MakeCodeBlock encode attr correctly") {
+    Fragment heading = Fragment::MakeHeading(3, {Fragment::MakeStaticText("h")});
+    REQUIRE(heading.IsBlockElement());
+    CHECK(heading.AsBlockElement().kind == BlockElementKind::Heading);
+    CHECK(heading.AsBlockElement().attr == "3");
+
+    Fragment quote = Fragment::MakeQuote({Fragment::MakeStaticText("q")});
+    CHECK(quote.AsBlockElement().kind == BlockElementKind::Quote);
+    CHECK(quote.AsBlockElement().attr.empty());
+
+    Fragment code = Fragment::MakeCodeBlock("cpp", {Fragment::MakeStaticText("c")});
+    CHECK(code.AsBlockElement().kind == BlockElementKind::CodeBlock);
+    CHECK(code.AsBlockElement().attr == "cpp");
+  }
+}
+
+TEST_SUITE("StructuralFragmentBlockRefVisiting") {
+  TEST_CASE("VisitBlockRefs finds a BlockRef nested inside a Group item") {
+    Group group{.kind = GroupKind::Bulleted,
+               .items = {{Fragment::MakeBlockRef(
+                   BlockRef("role.expert", Version{1, 0}))}}};
+    std::vector<Fragment> fragments = {Fragment::MakeGroup(std::move(group))};
+
+    std::vector<BlockId> found;
+    VisitBlockRefs(fragments,
+                   [&](const BlockRef& ref) { found.push_back(ref.GetBlockId()); });
+    REQUIRE(found.size() == 1);
+    CHECK(found[0] == "role.expert");
+  }
+
+  TEST_CASE("VisitBlockRefs finds a BlockRef nested inside a BlockElement") {
+    BlockElement element{
+        .kind = BlockElementKind::Quote,
+        .attr = "",
+        .content = {Fragment::MakeBlockRef(BlockRef("role.expert", Version{1, 0}))}};
+    std::vector<Fragment> fragments = {Fragment::MakeBlockElement(std::move(element))};
+
+    std::vector<BlockId> found;
+    VisitBlockRefs(fragments,
+                   [&](const BlockRef& ref) { found.push_back(ref.GetBlockId()); });
+    REQUIRE(found.size() == 1);
+    CHECK(found[0] == "role.expert");
+  }
+
+  TEST_CASE(
+      "VisitBlockRefs finds a BlockRef three levels deep: Group -> nested "
+      "Group -> BlockElement -> BlockRef") {
+    BlockElement innerElement{
+        .kind = BlockElementKind::Quote,
+        .attr = "",
+        .content = {Fragment::MakeBlockRef(BlockRef("deep.block", Version{1, 0}))}};
+    Group innerGroup{.kind = GroupKind::Bulleted,
+                     .items = {{Fragment::MakeBlockElement(std::move(innerElement))}}};
+    Group outerGroup{.kind = GroupKind::Bulleted,
+                     .items = {{Fragment::MakeGroup(std::move(innerGroup))}}};
+    std::vector<Fragment> fragments = {Fragment::MakeGroup(std::move(outerGroup))};
+
+    std::vector<BlockId> found;
+    VisitBlockRefs(fragments,
+                   [&](const BlockRef& ref) { found.push_back(ref.GetBlockId()); });
+    REQUIRE(found.size() == 1);
+    CHECK(found[0] == "deep.block");
+  }
+}
+
 TEST_SUITE("ConditionalRendering") {
   TEST_CASE_FIXTURE(EngineTestFixture, "first matching branch wins among 3+ branches") {
     createAndPublishBlock("cond.expert", "expert content");
