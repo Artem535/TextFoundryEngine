@@ -28,13 +28,7 @@ bool HasJsonFlag(int argc, char** argv) {
 }
 
 const OptionSpec& FindGlobalOption(std::string_view name) {
-  for (const auto& option : GlobalOptions()) {
-    if (option.long_name == name) {
-      return option;
-    }
-  }
-  throw std::logic_error("missing global option catalog entry: " +
-                         std::string(name));
+  return FindByName(GlobalOptions(), name, OptionSpecName, "global option");
 }
 
 std::string OptionFlags(const OptionSpec& option) {

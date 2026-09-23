@@ -53,29 +53,13 @@ struct RenderArgs {
   std::vector<std::string> params;
 };
 
-struct KeyValueError {
-  tf::Error error;
-};
-
 const CommandSpec& FindRootCommand(std::string_view name) {
-  for (const auto& command : RootCommands()) {
-    if (command.name == name) {
-      return command;
-    }
-  }
-  throw std::logic_error("missing command catalog entry: " +
-                         std::string(name));
+  return FindByName(RootCommands(), name, CommandSpecName, "command");
 }
 
 const CommandSpec& FindSubcommand(const CommandSpec& parent,
                                   std::string_view name) {
-  for (const auto& command : parent.subcommands) {
-    if (command.name == name) {
-      return command;
-    }
-  }
-  throw std::logic_error("missing command catalog subcommand entry: " +
-                         std::string(name));
+  return FindByName(parent.subcommands, name, CommandSpecName, "subcommand");
 }
 
 void ApplyAliases(CLI::App& command, const CommandSpec& spec) {

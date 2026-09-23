@@ -6,10 +6,10 @@ namespace cli {
 
 const std::vector<OptionSpec>& GlobalOptions() {
   static const std::vector<OptionSpec> options = {
-      {"data", "d", true, "PATH", {}, true, false},
-      {"project", "P", true, "KEY", {}, false, false},
-      {"strict", "", false, "", {}, false, false},
-      {"json", "", false, "", {}, false, false},
+      {"data", "d", true, "PATH"},
+      {"project", "P", true, "KEY"},
+      {"strict", "", false, ""},
+      {"json", "", false, ""},
   };
   return options;
 }
@@ -41,8 +41,7 @@ const std::vector<CommandSpec>& RootCommands() {
       {"completion",
        "Generate shell completion",
        {},
-       {{"shell", "", true, "SHELL", {"bash", "zsh", "fish"}, false,
-         false}}},
+       {{"shell", "", true, "SHELL"}}},
   };
   return commands;
 }
