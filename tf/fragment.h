@@ -190,11 +190,20 @@ enum class BlockElementKind { Heading, Quote, CodeBlock };
  * (kept empty) for Quote.
  */
 struct BlockElement {
-  BlockElementKind kind;
+  BlockElementKind kind = BlockElementKind::Heading;
   std::string attr;
   std::vector<Fragment> content;
 
   [[nodiscard]] Error validate(bool isDraftContext) const;
+
+  /**
+   * Parses `attr` as a heading level (only meaningful when
+   * kind == Heading). Returns std::nullopt if `attr` isn't a decimal
+   * integer in [1, 6] -- shared by validate() (which turns nullopt into
+   * Error::InvalidHeadingLevel()) and Renderer::RenderBlockElement (which
+   * falls back to level 1 for a value that reached storage unvalidated).
+   */
+  [[nodiscard]] std::optional<int> ParsedHeadingLevel() const;
 };
 
 /**

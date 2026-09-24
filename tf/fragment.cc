@@ -141,15 +141,20 @@ GroupBuilder& GroupBuilder::Item(Fragment fragment) {
 Group GroupBuilder::build() { return std::move(group_); }
 
 // BlockElement implementation
+std::optional<int> BlockElement::ParsedHeadingLevel() const {
+  int level = 0;
+  const auto* begin = attr.data();
+  const auto* end = begin + attr.size();
+  const auto parsed = std::from_chars(begin, end, level);
+  if (parsed.ec != std::errc{} || parsed.ptr != end || level < 1 || level > 6) {
+    return std::nullopt;
+  }
+  return level;
+}
+
 Error BlockElement::validate(bool isDraftContext) const {
-  if (kind == BlockElementKind::Heading) {
-    int level = 0;
-    const auto* begin = attr.data();
-    const auto* end = begin + attr.size();
-    const auto parsed = std::from_chars(begin, end, level);
-    if (parsed.ec != std::errc{} || parsed.ptr != end || level < 1 || level > 6) {
-      return Error::InvalidHeadingLevel();
-    }
+  if (kind == BlockElementKind::Heading && !ParsedHeadingLevel().has_value()) {
+    return Error::InvalidHeadingLevel();
   }
   for (const auto& fragment : content) {
     auto err = fragment.validate(isDraftContext);

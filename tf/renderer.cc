@@ -4,7 +4,6 @@
 
 #include "renderer.h"
 
-#include <charconv>
 #include <sstream>
 
 #include "logger.h"
@@ -318,17 +317,12 @@ Result<std::string> Renderer::RenderBlockElement(
 
   switch (element.kind) {
     case BlockElementKind::Heading: {
-      int level = 1;
-      const auto* begin = element.attr.data();
-      const auto* end = begin + element.attr.size();
-      auto parsed = std::from_chars(begin, end, level);
-      if (parsed.ec != std::errc{} || parsed.ptr != end || level < 1 || level > 6) {
-        // validate() guarantees this for any published Composition; Render()
-        // loads from storage rather than validating again, so this is a
-        // defensive fallback, not a redundant check (same posture as
-        // ResolveConditionals's elseContent check below it).
-        level = 1;
-      }
+      // validate() guarantees ParsedHeadingLevel() succeeds for any
+      // published Composition; Render() loads from storage rather than
+      // validating again, so the fallback to level 1 below is defensive,
+      // not a redundant check (same posture as ResolveConditionals's
+      // elseContent check below it).
+      const int level = element.ParsedHeadingLevel().value_or(1);
       return Result<std::string>(std::string(level, '#') + " " + inner);
     }
     case BlockElementKind::Quote: {
