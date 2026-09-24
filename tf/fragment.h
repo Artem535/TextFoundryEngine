@@ -23,10 +23,12 @@ namespace tf {
  * Fragment types supported in Composition
  */
 enum class FragmentType {
-  BlockRef,    ///< Reference to a Block
-  StaticText,  ///< Raw text without parameters
-  Separator,   ///< Typed separator (newline, paragraph, hr)
-  Conditional  ///< if/elif/else content selection
+  BlockRef,      ///< Reference to a Block
+  StaticText,    ///< Raw text without parameters
+  Separator,     ///< Typed separator (newline, paragraph, hr)
+  Conditional,   ///< if/elif/else content selection
+  Group,         ///< Ordered list of items (bulleted or numbered)
+  BlockElement   ///< Heading, blockquote, or fenced code block
 };
 
 /**
@@ -145,6 +147,65 @@ class ConditionalBuilder {
   bool has_open_branch_ = false;
 };
 
+enum class GroupKind { Bulleted, Numbered };
+
+/**
+ * Group - an ordered list of items, each item itself a fragment list (so an
+ * item can contain a nested Group, StaticText, BlockRef, or Conditional).
+ * Rendering (markers, indentation, line joining) is entirely a Renderer
+ * concern -- Group only carries the semantic shape.
+ */
+struct Group {
+  GroupKind kind = GroupKind::Bulleted;
+  std::vector<std::vector<Fragment>> items;
+
+  [[nodiscard]] Error validate(bool isDraftContext) const;
+};
+
+/**
+ * Fluent builder for Group. Item() appends one item (a fragment list); the
+ * single-Fragment overload is a convenience that wraps it in a one-element
+ * vector. Unlike ConditionalBuilder there's no open/closed branch state --
+ * items don't chain the way If()/Then() does.
+ */
+class GroupBuilder {
+ public:
+  explicit GroupBuilder(GroupKind kind);
+
+  GroupBuilder& Item(std::vector<Fragment> content);
+  GroupBuilder& Item(Fragment fragment);
+
+  [[nodiscard]] Group build();
+
+ private:
+  Group group_;
+};
+
+enum class BlockElementKind { Heading, Quote, CodeBlock };
+
+/**
+ * BlockElement - a single structural wrapper around a fragment list. `attr`
+ * is kind-specific: heading level as a decimal string ("1".."6") for
+ * Heading, language for CodeBlock (may be empty -- "unspecified"), unused
+ * (kept empty) for Quote.
+ */
+struct BlockElement {
+  BlockElementKind kind = BlockElementKind::Heading;
+  std::string attr;
+  std::vector<Fragment> content;
+
+  [[nodiscard]] Error validate(bool isDraftContext) const;
+
+  /**
+   * Parses `attr` as a heading level (only meaningful when
+   * kind == Heading). Returns std::nullopt if `attr` isn't a decimal
+   * integer in [1, 6] -- shared by validate() (which turns nullopt into
+   * Error::InvalidHeadingLevel()) and Renderer::RenderBlockElement (which
+   * falls back to level 1 for a value that reached storage unvalidated).
+   */
+  [[nodiscard]] std::optional<int> ParsedHeadingLevel() const;
+};
+
 /**
  * Fragment - single element of Composition
  * Can be BlockRef, StaticText, or Separator
@@ -161,6 +222,10 @@ class Fragment {
   explicit Fragment(Separator separator) : data_(separator) {}
 
   explicit Fragment(Conditional conditional) : data_(std::move(conditional)) {}
+
+  explicit Fragment(Group group) : data_(std::move(group)) {}
+
+  explicit Fragment(BlockElement element) : data_(std::move(element)) {}
 
   // Factory methods
   [[nodiscard]] static Fragment MakeBlockRef(BlockRef ref) {
@@ -179,6 +244,34 @@ class Fragment {
     return Fragment(std::move(cond));
   }
 
+  [[nodiscard]] static Fragment MakeGroup(Group group) {
+    return Fragment(std::move(group));
+  }
+
+  [[nodiscard]] static Fragment MakeBlockElement(BlockElement element) {
+    return Fragment(std::move(element));
+  }
+
+  [[nodiscard]] static Fragment MakeHeading(int level,
+                                            std::vector<Fragment> content) {
+    return Fragment(BlockElement{.kind = BlockElementKind::Heading,
+                                 .attr = std::to_string(level),
+                                 .content = std::move(content)});
+  }
+
+  [[nodiscard]] static Fragment MakeQuote(std::vector<Fragment> content) {
+    return Fragment(BlockElement{.kind = BlockElementKind::Quote,
+                                 .attr = "",
+                                 .content = std::move(content)});
+  }
+
+  [[nodiscard]] static Fragment MakeCodeBlock(std::string language,
+                                              std::vector<Fragment> content) {
+    return Fragment(BlockElement{.kind = BlockElementKind::CodeBlock,
+                                 .attr = std::move(language),
+                                 .content = std::move(content)});
+  }
+
   // Type checking
   [[nodiscard]] FragmentType type() const noexcept {
     return std::visit(
@@ -192,6 +285,10 @@ class Fragment {
             return FragmentType::Separator;
           if constexpr (std::is_same_v<T, Conditional>)
             return FragmentType::Conditional;
+          if constexpr (std::is_same_v<T, Group>)
+            return FragmentType::Group;
+          if constexpr (std::is_same_v<T, BlockElement>)
+            return FragmentType::BlockElement;
           return FragmentType::StaticText;  // default
         },
         data_);
@@ -211,6 +308,14 @@ class Fragment {
 
   [[nodiscard]] bool IsConditional() const noexcept {
     return std::holds_alternative<Conditional>(data_);
+  }
+
+  [[nodiscard]] bool IsGroup() const noexcept {
+    return std::holds_alternative<Group>(data_);
+  }
+
+  [[nodiscard]] bool IsBlockElement() const noexcept {
+    return std::holds_alternative<BlockElement>(data_);
   }
 
   // Accessors (use only after checking type)
@@ -242,6 +347,20 @@ class Fragment {
 
   [[nodiscard]] const Conditional& AsConditional() const& {
     return std::get<Conditional>(data_);
+  }
+
+  [[nodiscard]] Group& AsGroup() & { return std::get<Group>(data_); }
+
+  [[nodiscard]] const Group& AsGroup() const& {
+    return std::get<Group>(data_);
+  }
+
+  [[nodiscard]] BlockElement& AsBlockElement() & {
+    return std::get<BlockElement>(data_);
+  }
+
+  [[nodiscard]] const BlockElement& AsBlockElement() const& {
+    return std::get<BlockElement>(data_);
   }
 
   // Safe accessors returning nullptr if wrong type
@@ -277,11 +396,25 @@ class Fragment {
     return std::get_if<Conditional>(&data_);
   }
 
+  [[nodiscard]] Group* GetGroup() noexcept { return std::get_if<Group>(&data_); }
+
+  [[nodiscard]] const Group* GetGroup() const noexcept {
+    return std::get_if<Group>(&data_);
+  }
+
+  [[nodiscard]] BlockElement* GetBlockElement() noexcept {
+    return std::get_if<BlockElement>(&data_);
+  }
+
+  [[nodiscard]] const BlockElement* GetBlockElement() const noexcept {
+    return std::get_if<BlockElement>(&data_);
+  }
+
   // Validation
   [[nodiscard]] Error validate(bool isDraftContext = false) const;
 
  private:
-  std::variant<BlockRef, StaticText, Separator, Conditional> data_;
+  std::variant<BlockRef, StaticText, Separator, Conditional, Group, BlockElement> data_;
 };
 
 /**

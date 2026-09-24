@@ -4,6 +4,8 @@
 
 #include "fragment.h"
 
+#include <charconv>
+
 namespace tf {
 
 std::string Separator::toString() const {
@@ -105,6 +107,64 @@ ConditionalBuilder& ConditionalBuilder::Else() {
 
 Conditional ConditionalBuilder::build() { return std::move(cond_); }
 
+// Group implementation
+Error Group::validate(bool isDraftContext) const {
+  if (items.empty()) {
+    return Error::EmptyGroup();
+  }
+  for (const auto& item : items) {
+    for (const auto& fragment : item) {
+      auto err = fragment.validate(isDraftContext);
+      if (err.is_error()) {
+        return err;
+      }
+    }
+  }
+  return Error::success();
+}
+
+// GroupBuilder implementation
+GroupBuilder::GroupBuilder(GroupKind kind) { group_.kind = kind; }
+
+GroupBuilder& GroupBuilder::Item(std::vector<Fragment> content) {
+  group_.items.push_back(std::move(content));
+  return *this;
+}
+
+GroupBuilder& GroupBuilder::Item(Fragment fragment) {
+  std::vector<Fragment> content;
+  content.push_back(std::move(fragment));
+  group_.items.push_back(std::move(content));
+  return *this;
+}
+
+Group GroupBuilder::build() { return std::move(group_); }
+
+// BlockElement implementation
+std::optional<int> BlockElement::ParsedHeadingLevel() const {
+  int level = 0;
+  const auto* begin = attr.data();
+  const auto* end = begin + attr.size();
+  const auto parsed = std::from_chars(begin, end, level);
+  if (parsed.ec != std::errc{} || parsed.ptr != end || level < 1 || level > 6) {
+    return std::nullopt;
+  }
+  return level;
+}
+
+Error BlockElement::validate(bool isDraftContext) const {
+  if (kind == BlockElementKind::Heading && !ParsedHeadingLevel().has_value()) {
+    return Error::InvalidHeadingLevel();
+  }
+  for (const auto& fragment : content) {
+    auto err = fragment.validate(isDraftContext);
+    if (err.is_error()) {
+      return err;
+    }
+  }
+  return Error::success();
+}
+
 // Fragment implementation
 Error Fragment::validate(bool isDraftContext) const {
   return std::visit(
@@ -114,6 +174,12 @@ Error Fragment::validate(bool isDraftContext) const {
           return val.validate(isDraftContext);
         }
         if constexpr (std::is_same_v<T, Conditional>) {
+          return val.validate(isDraftContext);
+        }
+        if constexpr (std::is_same_v<T, Group>) {
+          return val.validate(isDraftContext);
+        }
+        if constexpr (std::is_same_v<T, BlockElement>) {
           return val.validate(isDraftContext);
         }
         // StaticText and Separator are always valid
@@ -137,6 +203,15 @@ void VisitBlockRefs(const std::vector<Fragment>& fragments,
       if (cond.elseContent.has_value()) {
         VisitBlockRefs(*cond.elseContent, visitor);
       }
+    }
+    if (fragment.IsGroup()) {
+      const Group& group = fragment.AsGroup();
+      for (const auto& item : group.items) {
+        VisitBlockRefs(item, visitor);
+      }
+    }
+    if (fragment.IsBlockElement()) {
+      VisitBlockRefs(fragment.AsBlockElement().content, visitor);
     }
   }
 }

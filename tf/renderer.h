@@ -128,6 +128,22 @@ class Renderer {
       const BlockRef& blockRef, const RenderContext& context,
       std::vector<std::pair<BlockId, Version>>& blocksUsed) const;
 
+  [[nodiscard]] Result<std::string> RenderGroup(
+      const Group& group, const RenderContext& context,
+      std::vector<std::pair<BlockId, Version>>& blocksUsed) const;
+
+  // Helper for RenderGroup: renders a Group into its individual, fully
+  // marked and indented lines (never containing an embedded '\n' within one
+  // element) rather than one joined string -- see RenderGroup's own comment
+  // for why this two-function split exists.
+  [[nodiscard]] Result<std::vector<std::string>> RenderGroupLines(
+      const Group& group, const RenderContext& context,
+      std::vector<std::pair<BlockId, Version>>& blocksUsed) const;
+
+  [[nodiscard]] Result<std::string> RenderBlockElement(
+      const BlockElement& element, const RenderContext& context,
+      std::vector<std::pair<BlockId, Version>>& blocksUsed) const;
+
   /**
    * Get structural style from composition or default
    */

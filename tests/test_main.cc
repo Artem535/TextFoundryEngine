@@ -488,6 +488,66 @@ TEST_SUITE("CompositionNormalization") {
   }
 
   TEST_CASE(
+      "NormalizeComposition rejects compositions containing Group content") {
+    EngineTestFixture fixture;
+
+    Group group = GroupBuilder(GroupKind::Bulleted)
+                      .Item(Fragment::MakeStaticText("tomatoes"))
+                      .build();
+
+    CompositionDraftBuilder composition_builder("prompt.group");
+    composition_builder.AddGroup(std::move(group));
+    auto composition = fixture.engine.PublishComposition(
+        composition_builder.build(), Version{1, 0});
+    REQUIRE(composition.HasValue());
+
+    fixture.engine.SetBlockNormalizer(
+        std::make_shared<FakeBlockNormalizer>(Result<NormalizedBlockData>(
+            NormalizedBlockData{.templ = "unused",
+                               .description = std::nullopt,
+                               .language = std::nullopt})));
+
+    auto result = fixture.engine.NormalizeComposition(
+        CompositionNormalizationRequest{
+            .source_composition_id = "prompt.group",
+            .style = SemanticStyle{.tone = std::string("warm")},
+        });
+    REQUIRE(result.HasError());
+    CHECK(result.error().code == ErrorCode::InvalidParamType);
+  }
+
+  TEST_CASE(
+      "PreviewNormalizeComposition rejects compositions containing "
+      "BlockElement content") {
+    EngineTestFixture fixture;
+
+    BlockElement heading =
+        BlockElement{.kind = BlockElementKind::Heading,
+                    .attr = "2",
+                    .content = {Fragment::MakeStaticText("Section title")}};
+
+    CompositionDraftBuilder composition_builder("prompt.block_element");
+    composition_builder.AddBlockElement(std::move(heading));
+    auto composition = fixture.engine.PublishComposition(
+        composition_builder.build(), Version{1, 0});
+    REQUIRE(composition.HasValue());
+
+    fixture.engine.SetBlockNormalizer(
+        std::make_shared<FakeBlockNormalizer>(Result<NormalizedBlockData>(
+            NormalizedBlockData{.templ = "unused",
+                               .description = std::nullopt,
+                               .language = std::nullopt})));
+
+    auto result = fixture.engine.PreviewNormalizeComposition(
+        CompositionNormalizationRequest{
+            .source_composition_id = "prompt.block_element",
+            .style = SemanticStyle{.tone = std::string("warm")},
+        });
+    REQUIRE(result.HasError());
+    CHECK(result.error().code == ErrorCode::InvalidParamType);
+  }
+
+  TEST_CASE(
       "NormalizeComposition recurses through a Conditional nested inside "
       "another Conditional's branch (two levels)") {
     EngineTestFixture fixture;
@@ -1088,6 +1148,268 @@ TEST_SUITE("Conditional") {
   }
 }
 
+TEST_SUITE("Group") {
+  TEST_CASE("empty items is an error") {
+    Group group{.kind = GroupKind::Bulleted, .items = {}};
+    auto err = group.validate(false);
+    CHECK(err.is_error());
+    CHECK(err.code == ErrorCode::EmptyGroup);
+  }
+
+  TEST_CASE("an item with zero fragments is valid") {
+    Group group{.kind = GroupKind::Bulleted, .items = {{}}};
+    CHECK(group.validate(false).is_success());
+  }
+
+  TEST_CASE("a valid group with multiple items passes validation") {
+    Group group{
+        .kind = GroupKind::Numbered,
+        .items = {{Fragment::MakeStaticText("first")},
+                  {Fragment::MakeStaticText("second")}}};
+    CHECK(group.validate(false).is_success());
+  }
+
+  TEST_CASE("an invalid fragment nested in an item propagates its error") {
+    Conditional badCond;
+    badCond.elseContent = std::vector<Fragment>{};  // no branches -> EmptyConditional
+    Group group{.kind = GroupKind::Bulleted,
+               .items = {{Fragment::MakeConditional(std::move(badCond))}}};
+
+    auto err = group.validate(false);
+    CHECK(err.is_error());
+    CHECK(err.code == ErrorCode::EmptyConditional);
+  }
+
+  TEST_CASE("Fragment::validate propagates a bad Group's error") {
+    Group group{.kind = GroupKind::Bulleted, .items = {}};
+    Fragment f = Fragment::MakeGroup(std::move(group));
+    auto err = f.validate(false);
+    CHECK(err.is_error());
+    CHECK(err.code == ErrorCode::EmptyGroup);
+  }
+
+  TEST_CASE("Composition::validate propagates a nested Group's error") {
+    Composition comp("test.group.invalid");
+    Group group{.kind = GroupKind::Bulleted, .items = {}};
+    comp.InsertFragment(0, Fragment::MakeGroup(std::move(group)));
+
+    auto err = comp.validate();
+    CHECK(err.is_error());
+    CHECK(err.code == ErrorCode::EmptyGroup);
+  }
+}
+
+TEST_SUITE("GroupBuilder") {
+  TEST_CASE("Item(vector<Fragment>) and Item(Fragment) build the expected items") {
+    auto group = GroupBuilder(GroupKind::Numbered)
+                     .Item(Fragment::MakeStaticText("single"))
+                     .Item(std::vector<Fragment>{Fragment::MakeStaticText("a"),
+                                                 Fragment::MakeStaticText("b")})
+                     .build();
+
+    REQUIRE(group.kind == GroupKind::Numbered);
+    REQUIRE(group.items.size() == 2);
+    REQUIRE(group.items[0].size() == 1);
+    CHECK(group.items[0][0].AsStaticText().text() == "single");
+    REQUIRE(group.items[1].size() == 2);
+    CHECK(group.items[1][0].AsStaticText().text() == "a");
+    CHECK(group.items[1][1].AsStaticText().text() == "b");
+  }
+}
+
+TEST_SUITE("BlockElement") {
+  TEST_CASE("Heading accepts levels 1 through 6") {
+    for (const std::string& level : {"1", "2", "3", "4", "5", "6"}) {
+      BlockElement element{.kind = BlockElementKind::Heading,
+                           .attr = level,
+                           .content = {Fragment::MakeStaticText("text")}};
+      CHECK(element.validate(false).is_success());
+    }
+  }
+
+  TEST_CASE("Heading rejects out-of-range or malformed levels") {
+    for (const std::string& level : {"0", "7", "abc", "", "1.5", " 1"}) {
+      BlockElement element{.kind = BlockElementKind::Heading,
+                           .attr = level,
+                           .content = {}};
+      auto err = element.validate(false);
+      CHECK(err.is_error());
+      CHECK(err.code == ErrorCode::InvalidHeadingLevel);
+    }
+  }
+
+  TEST_CASE("Quote and CodeBlock accept any attr, including empty") {
+    BlockElement quote{.kind = BlockElementKind::Quote, .attr = "", .content = {}};
+    CHECK(quote.validate(false).is_success());
+
+    BlockElement code{.kind = BlockElementKind::CodeBlock, .attr = "", .content = {}};
+    CHECK(code.validate(false).is_success());
+
+    BlockElement codeWithLang{
+        .kind = BlockElementKind::CodeBlock, .attr = "cpp", .content = {}};
+    CHECK(codeWithLang.validate(false).is_success());
+  }
+
+  TEST_CASE("an invalid fragment nested in content propagates its error") {
+    Conditional badCond;
+    badCond.elseContent = std::vector<Fragment>{};  // no branches -> EmptyConditional
+    BlockElement element{.kind = BlockElementKind::Quote,
+                         .attr = "",
+                         .content = {Fragment::MakeConditional(std::move(badCond))}};
+
+    auto err = element.validate(false);
+    CHECK(err.is_error());
+    CHECK(err.code == ErrorCode::EmptyConditional);
+  }
+
+  TEST_CASE("Fragment::validate propagates a bad BlockElement's error") {
+    Fragment f = Fragment::MakeHeading(7, {});
+    auto err = f.validate(false);
+    CHECK(err.is_error());
+    CHECK(err.code == ErrorCode::InvalidHeadingLevel);
+  }
+
+  TEST_CASE("MakeHeading/MakeQuote/MakeCodeBlock encode attr correctly") {
+    Fragment heading = Fragment::MakeHeading(3, {Fragment::MakeStaticText("h")});
+    REQUIRE(heading.IsBlockElement());
+    CHECK(heading.AsBlockElement().kind == BlockElementKind::Heading);
+    CHECK(heading.AsBlockElement().attr == "3");
+
+    Fragment quote = Fragment::MakeQuote({Fragment::MakeStaticText("q")});
+    CHECK(quote.AsBlockElement().kind == BlockElementKind::Quote);
+    CHECK(quote.AsBlockElement().attr.empty());
+
+    Fragment code = Fragment::MakeCodeBlock("cpp", {Fragment::MakeStaticText("c")});
+    CHECK(code.AsBlockElement().kind == BlockElementKind::CodeBlock);
+    CHECK(code.AsBlockElement().attr == "cpp");
+  }
+}
+
+TEST_SUITE("StructuralFragmentBlockRefVisiting") {
+  TEST_CASE("VisitBlockRefs finds a BlockRef nested inside a Group item") {
+    Group group{.kind = GroupKind::Bulleted,
+               .items = {{Fragment::MakeBlockRef(
+                   BlockRef("role.expert", Version{1, 0}))}}};
+    std::vector<Fragment> fragments = {Fragment::MakeGroup(std::move(group))};
+
+    std::vector<BlockId> found;
+    VisitBlockRefs(fragments,
+                   [&](const BlockRef& ref) { found.push_back(ref.GetBlockId()); });
+    REQUIRE(found.size() == 1);
+    CHECK(found[0] == "role.expert");
+  }
+
+  TEST_CASE("VisitBlockRefs finds a BlockRef nested inside a BlockElement") {
+    BlockElement element{
+        .kind = BlockElementKind::Quote,
+        .attr = "",
+        .content = {Fragment::MakeBlockRef(BlockRef("role.expert", Version{1, 0}))}};
+    std::vector<Fragment> fragments = {Fragment::MakeBlockElement(std::move(element))};
+
+    std::vector<BlockId> found;
+    VisitBlockRefs(fragments,
+                   [&](const BlockRef& ref) { found.push_back(ref.GetBlockId()); });
+    REQUIRE(found.size() == 1);
+    CHECK(found[0] == "role.expert");
+  }
+
+  TEST_CASE(
+      "VisitBlockRefs finds a BlockRef three levels deep: Group -> nested "
+      "Group -> BlockElement -> BlockRef") {
+    BlockElement innerElement{
+        .kind = BlockElementKind::Quote,
+        .attr = "",
+        .content = {Fragment::MakeBlockRef(BlockRef("deep.block", Version{1, 0}))}};
+    Group innerGroup{.kind = GroupKind::Bulleted,
+                     .items = {{Fragment::MakeBlockElement(std::move(innerElement))}}};
+    Group outerGroup{.kind = GroupKind::Bulleted,
+                     .items = {{Fragment::MakeGroup(std::move(innerGroup))}}};
+    std::vector<Fragment> fragments = {Fragment::MakeGroup(std::move(outerGroup))};
+
+    std::vector<BlockId> found;
+    VisitBlockRefs(fragments,
+                   [&](const BlockRef& ref) { found.push_back(ref.GetBlockId()); });
+    REQUIRE(found.size() == 1);
+    CHECK(found[0] == "deep.block");
+  }
+}
+
+TEST_SUITE("StructuralFragmentPersistence") {
+  TEST_CASE_FIXTURE(EngineTestFixture,
+                    "a nested Group survives an ObjectBox store+load round trip") {
+    CompositionDraftBuilder builder("group.roundtrip");
+    Group inner{.kind = GroupKind::Numbered,
+               .items = {{Fragment::MakeStaticText("inner one")},
+                         {Fragment::MakeStaticText("inner two")}}};
+    Group outer{.kind = GroupKind::Bulleted,
+               .items = {{Fragment::MakeStaticText("outer text")},
+                         {Fragment::MakeGroup(std::move(inner))}}};
+    builder.AddGroup(std::move(outer));
+    auto pubResult = engine.PublishComposition(builder.build(), Engine::VersionBump::Minor);
+    REQUIRE(pubResult.HasValue());
+
+    auto loaded = engine.LoadComposition("group.roundtrip");
+    REQUIRE(loaded.HasValue());
+    REQUIRE(loaded.value().fragmentCount() == 1);
+    REQUIRE(loaded.value().fragment(0).IsGroup());
+
+    const Group& loadedOuter = loaded.value().fragment(0).AsGroup();
+    CHECK(loadedOuter.kind == GroupKind::Bulleted);
+    REQUIRE(loadedOuter.items.size() == 2);
+    REQUIRE(loadedOuter.items[0].size() == 1);
+    CHECK(loadedOuter.items[0][0].AsStaticText().text() == "outer text");
+    REQUIRE(loadedOuter.items[1].size() == 1);
+    REQUIRE(loadedOuter.items[1][0].IsGroup());
+
+    const Group& loadedInner = loadedOuter.items[1][0].AsGroup();
+    CHECK(loadedInner.kind == GroupKind::Numbered);
+    REQUIRE(loadedInner.items.size() == 2);
+    CHECK(loadedInner.items[0][0].AsStaticText().text() == "inner one");
+    CHECK(loadedInner.items[1][0].AsStaticText().text() == "inner two");
+  }
+
+  TEST_CASE_FIXTURE(EngineTestFixture,
+                    "each BlockElementKind survives an ObjectBox store+load round trip") {
+    CompositionDraftBuilder builder("block_element.roundtrip");
+    builder.AddBlockElement(
+        BlockElement{.kind = BlockElementKind::Heading,
+                    .attr = "2",
+                    .content = {Fragment::MakeStaticText("a heading")}});
+    builder.AddBlockElement(
+        BlockElement{.kind = BlockElementKind::Quote,
+                    .attr = "",
+                    .content = {Fragment::MakeStaticText("a quote")}});
+    builder.AddBlockElement(
+        BlockElement{.kind = BlockElementKind::CodeBlock,
+                    .attr = "cpp",
+                    .content = {Fragment::MakeStaticText("int x = 1;")}});
+    auto pubResult = engine.PublishComposition(builder.build(), Engine::VersionBump::Minor);
+    REQUIRE(pubResult.HasValue());
+
+    auto loaded = engine.LoadComposition("block_element.roundtrip");
+    REQUIRE(loaded.HasValue());
+    REQUIRE(loaded.value().fragmentCount() == 3);
+
+    REQUIRE(loaded.value().fragment(0).IsBlockElement());
+    const BlockElement& heading = loaded.value().fragment(0).AsBlockElement();
+    CHECK(heading.kind == BlockElementKind::Heading);
+    CHECK(heading.attr == "2");
+    REQUIRE(heading.content.size() == 1);
+    CHECK(heading.content[0].AsStaticText().text() == "a heading");
+
+    REQUIRE(loaded.value().fragment(1).IsBlockElement());
+    const BlockElement& quote = loaded.value().fragment(1).AsBlockElement();
+    CHECK(quote.kind == BlockElementKind::Quote);
+    CHECK(quote.content[0].AsStaticText().text() == "a quote");
+
+    REQUIRE(loaded.value().fragment(2).IsBlockElement());
+    const BlockElement& code = loaded.value().fragment(2).AsBlockElement();
+    CHECK(code.kind == BlockElementKind::CodeBlock);
+    CHECK(code.attr == "cpp");
+    CHECK(code.content[0].AsStaticText().text() == "int x = 1;");
+  }
+}
+
 TEST_SUITE("ConditionalRendering") {
   TEST_CASE_FIXTURE(EngineTestFixture, "first matching branch wins among 3+ branches") {
     createAndPublishBlock("cond.expert", "expert content");
@@ -1250,6 +1572,160 @@ TEST_SUITE("ConditionalRendering") {
     auto result = engine.Render("cond.empty_else_roundtrip", ctx);
     REQUIRE(result.HasValue());
     CHECK(result.value().text.empty());
+  }
+}
+
+TEST_SUITE("GroupRendering") {
+  TEST_CASE_FIXTURE(EngineTestFixture, "a flat bulleted list renders with '- ' markers") {
+    CompositionDraftBuilder builder("group.flat_bulleted");
+    Group group{.kind = GroupKind::Bulleted,
+               .items = {{Fragment::MakeStaticText("first")},
+                         {Fragment::MakeStaticText("second")},
+                         {Fragment::MakeStaticText("third")}}};
+    builder.AddGroup(std::move(group));
+    auto pubResult = engine.PublishComposition(builder.build(), Engine::VersionBump::Minor);
+    REQUIRE(pubResult.HasValue());
+
+    auto result = engine.Render("group.flat_bulleted");
+    REQUIRE(result.HasValue());
+    CHECK(result.value().text == "- first\n- second\n- third");
+  }
+
+  TEST_CASE_FIXTURE(EngineTestFixture, "a flat numbered list renders with '1. ', '2. ', ... markers") {
+    CompositionDraftBuilder builder("group.flat_numbered");
+    Group group{.kind = GroupKind::Numbered,
+               .items = {{Fragment::MakeStaticText("first")},
+                         {Fragment::MakeStaticText("second")}}};
+    builder.AddGroup(std::move(group));
+    auto pubResult = engine.PublishComposition(builder.build(), Engine::VersionBump::Minor);
+    REQUIRE(pubResult.HasValue());
+
+    auto result = engine.Render("group.flat_numbered");
+    REQUIRE(result.HasValue());
+    CHECK(result.value().text == "1. first\n2. second");
+  }
+
+  TEST_CASE_FIXTURE(EngineTestFixture,
+                    "a nested list renders indented under its parent item, numbering restarting at 1") {
+    CompositionDraftBuilder builder("group.nested");
+    Group inner{.kind = GroupKind::Numbered,
+               .items = {{Fragment::MakeStaticText("salt")},
+                         {Fragment::MakeStaticText("pepper")}}};
+    Group outer{.kind = GroupKind::Bulleted,
+               .items = {{Fragment::MakeStaticText("tomatoes")},
+                         {Fragment::MakeStaticText("spices:"),
+                          Fragment::MakeGroup(std::move(inner))},
+                         {Fragment::MakeStaticText("onion")}}};
+    builder.AddGroup(std::move(outer));
+    auto pubResult = engine.PublishComposition(builder.build(), Engine::VersionBump::Minor);
+    REQUIRE(pubResult.HasValue());
+
+    auto result = engine.Render("group.nested");
+    REQUIRE(result.HasValue());
+    CHECK(result.value().text ==
+          "- tomatoes\n"
+          "- spices:\n"
+          "  1. salt\n"
+          "  2. pepper\n"
+          "- onion");
+  }
+
+  TEST_CASE_FIXTURE(EngineTestFixture, "a Group item containing a BlockRef renders the block's expanded template") {
+    createAndPublishBlock("group.item_block", "an ingredient");
+    CompositionDraftBuilder builder("group.with_block_ref");
+    Group group{.kind = GroupKind::Bulleted,
+               .items = {{Fragment::MakeBlockRef(
+                   BlockRef("group.item_block", Version{1, 0}))}}};
+    builder.AddGroup(std::move(group));
+    auto pubResult = engine.PublishComposition(builder.build(), Engine::VersionBump::Minor);
+    REQUIRE(pubResult.HasValue());
+
+    auto result = engine.Render("group.with_block_ref");
+    REQUIRE(result.HasValue());
+    CHECK(result.value().text == "- an ingredient");
+  }
+
+  TEST_CASE_FIXTURE(EngineTestFixture,
+                    "a Conditional nested inside a Group item is resolved at render time") {
+    CompositionDraftBuilder builder("group.with_conditional");
+    Conditional cond;
+    cond.branches.push_back(Branch{
+        .conditions = {Condition{.attribute = "level", .allowedValues = {"expert"}}},
+        .content = {Fragment::MakeStaticText("expert item")}});
+    cond.elseContent = std::vector<Fragment>{Fragment::MakeStaticText("default item")};
+    Group group{.kind = GroupKind::Bulleted,
+               .items = {{Fragment::MakeConditional(std::move(cond))}}};
+    builder.AddGroup(std::move(group));
+    auto pubResult = engine.PublishComposition(builder.build(), Engine::VersionBump::Minor);
+    REQUIRE(pubResult.HasValue());
+
+    auto expertResult =
+        engine.Render("group.with_conditional", RenderContext{}.WithParam("level", "expert"));
+    REQUIRE(expertResult.HasValue());
+    CHECK(expertResult.value().text == "- expert item");
+
+    auto defaultResult = engine.Render("group.with_conditional");
+    REQUIRE(defaultResult.HasValue());
+    CHECK(defaultResult.value().text == "- default item");
+  }
+
+  TEST_CASE_FIXTURE(EngineTestFixture,
+                    "a Group nested inside a Conditional branch still resolves correctly (regression)") {
+    CompositionDraftBuilder builder("group.inside_conditional");
+    Group group{.kind = GroupKind::Bulleted,
+               .items = {{Fragment::MakeStaticText("a")}, {Fragment::MakeStaticText("b")}}};
+    Conditional cond;
+    cond.branches.push_back(Branch{
+        .conditions = {Condition{.attribute = "show", .allowedValues = {"list"}}},
+        .content = {Fragment::MakeGroup(std::move(group))}});
+    cond.elseContent = std::vector<Fragment>{Fragment::MakeStaticText("no list")};
+    builder.AddConditional(std::move(cond));
+    auto pubResult = engine.PublishComposition(builder.build(), Engine::VersionBump::Minor);
+    REQUIRE(pubResult.HasValue());
+
+    auto result =
+        engine.Render("group.inside_conditional", RenderContext{}.WithParam("show", "list"));
+    REQUIRE(result.HasValue());
+    CHECK(result.value().text == "- a\n- b");
+  }
+}
+
+TEST_SUITE("BlockElementRendering") {
+  TEST_CASE_FIXTURE(EngineTestFixture, "Heading level 2 renders with two '#' characters") {
+    CompositionDraftBuilder builder("block_element.heading");
+    builder.AddBlockElement(Fragment::MakeHeading(2, {Fragment::MakeStaticText("Title")})
+                                .AsBlockElement());
+    auto pubResult = engine.PublishComposition(builder.build(), Engine::VersionBump::Minor);
+    REQUIRE(pubResult.HasValue());
+
+    auto result = engine.Render("block_element.heading");
+    REQUIRE(result.HasValue());
+    CHECK(result.value().text == "## Title");
+  }
+
+  TEST_CASE_FIXTURE(EngineTestFixture, "Quote prefixes every line with '> '") {
+    CompositionDraftBuilder builder("block_element.quote");
+    builder.AddBlockElement(
+        Fragment::MakeQuote({Fragment::MakeStaticText("line one")}).AsBlockElement());
+    auto pubResult = engine.PublishComposition(builder.build(), Engine::VersionBump::Minor);
+    REQUIRE(pubResult.HasValue());
+
+    auto result = engine.Render("block_element.quote");
+    REQUIRE(result.HasValue());
+    CHECK(result.value().text == "> line one");
+  }
+
+  TEST_CASE_FIXTURE(EngineTestFixture, "CodeBlock wraps content in a language-tagged fence") {
+    CompositionDraftBuilder builder("block_element.code");
+    builder.AddBlockElement(
+        Fragment::MakeCodeBlock("cpp", {Fragment::MakeStaticText("int x = 1;")})
+            .AsBlockElement());
+    auto pubResult = engine.PublishComposition(builder.build(), Engine::VersionBump::Minor);
+    REQUIRE(pubResult.HasValue());
+
+    auto result = engine.Render("block_element.code");
+    REQUIRE(result.HasValue());
+    CHECK(result.value().text == "```cpp\nint x = 1;\n```");
   }
 }
 

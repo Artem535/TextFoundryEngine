@@ -118,6 +118,55 @@ tf::Result<tf::Conditional> ToConditional(
   return tf::Result<tf::Conditional>(std::move(conditional));
 }
 
+tf::Result<tf::Group> ToGroup(const GroupFragmentDto& dto, bool is_draft_context) {
+  tf::Group group;
+  group.kind = (dto.kind == "numbered") ? tf::GroupKind::Numbered
+                                        : tf::GroupKind::Bulleted;
+  group.items.reserve(dto.items.size());
+
+  for (const auto& item_dto : dto.items) {
+    auto content = ToFragments(item_dto.content, is_draft_context);
+    if (content.HasError()) {
+      return tf::Result<tf::Group>(content.error());
+    }
+    group.items.push_back(std::move(content.value()));
+  }
+
+  const auto validation = group.validate(is_draft_context);
+  if (validation.is_error()) {
+    return tf::Result<tf::Group>(validation);
+  }
+  return tf::Result<tf::Group>(std::move(group));
+}
+
+tf::Result<tf::BlockElement> ToBlockElement(const BlockElementFragmentDto& dto,
+                                            bool is_draft_context) {
+  tf::BlockElement element;
+  if (dto.kind == "heading") {
+    element.kind = tf::BlockElementKind::Heading;
+  } else if (dto.kind == "code_block") {
+    element.kind = tf::BlockElementKind::CodeBlock;
+  } else if (dto.kind == "quote") {
+    element.kind = tf::BlockElementKind::Quote;
+  } else {
+    return tf::Result<tf::BlockElement>(
+        InvalidDto("Unknown block_element kind: " + dto.kind));
+  }
+  element.attr = dto.attr;
+
+  auto content = ToFragments(dto.content, is_draft_context);
+  if (content.HasError()) {
+    return tf::Result<tf::BlockElement>(content.error());
+  }
+  element.content = std::move(content.value());
+
+  const auto validation = element.validate(is_draft_context);
+  if (validation.is_error()) {
+    return tf::Result<tf::BlockElement>(validation);
+  }
+  return tf::Result<tf::BlockElement>(std::move(element));
+}
+
 // Appends an already-converted, already-validated domain Fragment to a
 // draft builder. This is the only place a converted Fragment is unpacked
 // back into CompositionDraftBuilder's typed Add* calls, so ToCompositionDraft
@@ -141,6 +190,12 @@ tf::Error AppendFragmentToDraft(tf::CompositionDraftBuilder& builder,
     case tf::FragmentType::Conditional:
       builder.AddConditional(std::move(fragment.AsConditional()));
       return tf::Error::success();
+    case tf::FragmentType::Group:
+      builder.AddGroup(std::move(fragment.AsGroup()));
+      return tf::Error::success();
+    case tf::FragmentType::BlockElement:
+      builder.AddBlockElement(std::move(fragment.AsBlockElement()));
+      return tf::Error::success();
   }
   return InvalidDto("Unknown fragment type");
 }
@@ -156,7 +211,9 @@ tf::Result<tf::Fragment> ToFragment(const FragmentDto& dto,
   const auto payload_count = static_cast<int>(dto.block_ref.has_value()) +
                               static_cast<int>(dto.static_text.has_value()) +
                               static_cast<int>(dto.separator.has_value()) +
-                              static_cast<int>(dto.conditional.has_value());
+                              static_cast<int>(dto.conditional.has_value()) +
+                              static_cast<int>(dto.group.has_value()) +
+                              static_cast<int>(dto.block_element.has_value());
 
   if (payload_count != 1) {
     return tf::Result<tf::Fragment>(InvalidDto(
@@ -218,6 +275,31 @@ tf::Result<tf::Fragment> ToFragment(const FragmentDto& dto,
     }
     return tf::Result<tf::Fragment>(
         tf::Fragment::MakeConditional(std::move(conditional.value())));
+  }
+
+  if (dto.kind == "group") {
+    if (!dto.group.has_value()) {
+      return tf::Result<tf::Fragment>(
+          InvalidDto("Fragment kind group requires group payload"));
+    }
+    auto group = ToGroup(*dto.group, is_draft_context);
+    if (group.HasError()) {
+      return tf::Result<tf::Fragment>(group.error());
+    }
+    return tf::Result<tf::Fragment>(tf::Fragment::MakeGroup(std::move(group.value())));
+  }
+
+  if (dto.kind == "block_element") {
+    if (!dto.block_element.has_value()) {
+      return tf::Result<tf::Fragment>(
+          InvalidDto("Fragment kind block_element requires block_element payload"));
+    }
+    auto element = ToBlockElement(*dto.block_element, is_draft_context);
+    if (element.HasError()) {
+      return tf::Result<tf::Fragment>(element.error());
+    }
+    return tf::Result<tf::Fragment>(
+        tf::Fragment::MakeBlockElement(std::move(element.value())));
   }
 
   return tf::Result<tf::Fragment>(
