@@ -969,6 +969,18 @@ Result<std::vector<Fragment>> Engine::NormalizeFragments(
       continue;
     }
 
+    if (fragment.IsGroup() || fragment.IsBlockElement()) {
+      // Normalization doesn't recurse into Group/BlockElement content yet
+      // (deferred to a follow-up spec, same as Conditional was before its
+      // own normalization support shipped). Reject rather than silently
+      // passing the subtree through -- that would skip normalizing any
+      // BlockRef nested inside a list item or heading.
+      return Result<std::vector<Fragment>>(
+          Error{ErrorCode::InvalidParamType,
+                "Normalization does not yet support compositions "
+                "containing Group or BlockElement content"});
+    }
+
     const auto& block_ref = fragment.AsBlockRef();
     auto block_result = block_ref.version().has_value()
                             ? LoadBlock(block_ref.GetBlockId(), *block_ref.version())
@@ -1098,6 +1110,15 @@ Result<std::vector<std::string>> Engine::FragmentTreeToPreviewText(
       }
       texts.push_back(block.str());
       continue;
+    }
+
+    if (fragment.IsGroup() || fragment.IsBlockElement()) {
+      // See the matching guard in NormalizeFragments -- normalization
+      // doesn't recurse into Group/BlockElement content yet.
+      return Result<std::vector<std::string>>(
+          Error{ErrorCode::InvalidParamType,
+                "Normalization does not yet support compositions "
+                "containing Group or BlockElement content"});
     }
 
     const auto& block_ref = fragment.AsBlockRef();

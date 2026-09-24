@@ -488,6 +488,66 @@ TEST_SUITE("CompositionNormalization") {
   }
 
   TEST_CASE(
+      "NormalizeComposition rejects compositions containing Group content") {
+    EngineTestFixture fixture;
+
+    Group group = GroupBuilder(GroupKind::Bulleted)
+                      .Item(Fragment::MakeStaticText("tomatoes"))
+                      .build();
+
+    CompositionDraftBuilder composition_builder("prompt.group");
+    composition_builder.AddGroup(std::move(group));
+    auto composition = fixture.engine.PublishComposition(
+        composition_builder.build(), Version{1, 0});
+    REQUIRE(composition.HasValue());
+
+    fixture.engine.SetBlockNormalizer(
+        std::make_shared<FakeBlockNormalizer>(Result<NormalizedBlockData>(
+            NormalizedBlockData{.templ = "unused",
+                               .description = std::nullopt,
+                               .language = std::nullopt})));
+
+    auto result = fixture.engine.NormalizeComposition(
+        CompositionNormalizationRequest{
+            .source_composition_id = "prompt.group",
+            .style = SemanticStyle{.tone = std::string("warm")},
+        });
+    REQUIRE(result.HasError());
+    CHECK(result.error().code == ErrorCode::InvalidParamType);
+  }
+
+  TEST_CASE(
+      "PreviewNormalizeComposition rejects compositions containing "
+      "BlockElement content") {
+    EngineTestFixture fixture;
+
+    BlockElement heading =
+        BlockElement{.kind = BlockElementKind::Heading,
+                    .attr = "2",
+                    .content = {Fragment::MakeStaticText("Section title")}};
+
+    CompositionDraftBuilder composition_builder("prompt.block_element");
+    composition_builder.AddBlockElement(std::move(heading));
+    auto composition = fixture.engine.PublishComposition(
+        composition_builder.build(), Version{1, 0});
+    REQUIRE(composition.HasValue());
+
+    fixture.engine.SetBlockNormalizer(
+        std::make_shared<FakeBlockNormalizer>(Result<NormalizedBlockData>(
+            NormalizedBlockData{.templ = "unused",
+                               .description = std::nullopt,
+                               .language = std::nullopt})));
+
+    auto result = fixture.engine.PreviewNormalizeComposition(
+        CompositionNormalizationRequest{
+            .source_composition_id = "prompt.block_element",
+            .style = SemanticStyle{.tone = std::string("warm")},
+        });
+    REQUIRE(result.HasError());
+    CHECK(result.error().code == ErrorCode::InvalidParamType);
+  }
+
+  TEST_CASE(
       "NormalizeComposition recurses through a Conditional nested inside "
       "another Conditional's branch (two levels)") {
     EngineTestFixture fixture;
