@@ -180,6 +180,47 @@ std::set<std::string> PlaceholderSet(const Template& templ) {
   return std::set<std::string>(names.begin(), names.end());
 }
 
+std::string RenderCondition(const Condition& condition) {
+  std::ostringstream stream;
+  stream << condition.attribute << (condition.negate ? " not in {" : " in {");
+  bool first = true;
+  for (const auto& value : condition.allowedValues) {
+    if (!first) {
+      stream << ", ";
+    }
+    first = false;
+    stream << value;
+  }
+  stream << "}";
+  return stream.str();
+}
+
+std::string RenderBranchLabel(const std::vector<Condition>& conditions,
+                              const char* keyword) {
+  std::ostringstream stream;
+  stream << "[" << keyword << " ";
+  for (size_t i = 0; i < conditions.size(); ++i) {
+    if (i > 0) {
+      stream << " and ";
+    }
+    stream << RenderCondition(conditions[i]);
+  }
+  stream << "]";
+  return stream.str();
+}
+
+std::string JoinWithDelimiter(const std::vector<std::string>& parts,
+                              const std::optional<std::string>& delimiter) {
+  std::ostringstream stream;
+  for (size_t i = 0; i < parts.size(); ++i) {
+    if (i > 0 && delimiter.has_value()) {
+      stream << *delimiter;
+    }
+    stream << parts[i];
+  }
+  return stream.str();
+}
+
 std::string DerivedNormalizedBlockId(const Block& source_block,
                                      const SemanticStyle& style,
                                      const std::string& fingerprint) {
@@ -872,6 +913,206 @@ Result<std::string> Engine::Normalize(const std::string& text,
   return normalizer_->Normalize(text, style);
 }
 
+Result<std::vector<Fragment>> Engine::NormalizeFragments(
+    const std::vector<Fragment>& fragments,
+    const CompositionNormalizationRequest& request,
+    const std::string& normalization_key_tag, bool persist_derived_blocks,
+    std::vector<std::pair<BlockId, BlockId>>& rewritten_blocks) {
+  std::vector<Fragment> result;
+  result.reserve(fragments.size());
+
+  for (const auto& fragment : fragments) {
+    if (fragment.IsSeparator()) {
+      result.push_back(Fragment::MakeSeparator(fragment.AsSeparator().type));
+      continue;
+    }
+
+    if (fragment.IsStaticText()) {
+      std::string text = fragment.AsStaticText().text();
+      if (request.normalize_static_text && normalizer_) {
+        auto normalized = normalizer_->Normalize(text, request.style);
+        if (normalized.HasError()) {
+          return Result<std::vector<Fragment>>(normalized.error());
+        }
+        text = normalized.value();
+      }
+      result.push_back(Fragment::MakeStaticText(std::move(text)));
+      continue;
+    }
+
+    if (fragment.IsConditional()) {
+      const Conditional& cond = fragment.AsConditional();
+      Conditional normalized_cond;
+      normalized_cond.branches.reserve(cond.branches.size());
+      for (const auto& branch : cond.branches) {
+        Branch normalized_branch;
+        normalized_branch.conditions = branch.conditions;
+        auto normalized_content =
+            NormalizeFragments(branch.content, request, normalization_key_tag,
+                               persist_derived_blocks, rewritten_blocks);
+        if (normalized_content.HasError()) {
+          return Result<std::vector<Fragment>>(normalized_content.error());
+        }
+        normalized_branch.content = std::move(normalized_content.value());
+        normalized_cond.branches.push_back(std::move(normalized_branch));
+      }
+      if (cond.elseContent.has_value()) {
+        auto normalized_else =
+            NormalizeFragments(*cond.elseContent, request, normalization_key_tag,
+                               persist_derived_blocks, rewritten_blocks);
+        if (normalized_else.HasError()) {
+          return Result<std::vector<Fragment>>(normalized_else.error());
+        }
+        normalized_cond.elseContent = std::move(normalized_else.value());
+      }
+      result.push_back(Fragment::MakeConditional(std::move(normalized_cond)));
+      continue;
+    }
+
+    const auto& block_ref = fragment.AsBlockRef();
+    auto block_result = block_ref.version().has_value()
+                            ? LoadBlock(block_ref.GetBlockId(), *block_ref.version())
+                            : LoadBlock(block_ref.GetBlockId());
+    if (block_result.HasError()) {
+      return Result<std::vector<Fragment>>(block_result.error());
+    }
+
+    const Block source_block = block_result.value();
+    const std::string derived_block_id = DerivedNormalizedBlockId(
+        source_block, request.style, blockNormalizer_->Fingerprint());
+
+    PublishedBlock published_block(derived_block_id, Version{1, 0});
+    bool reused_cached_block = false;
+    if (request.reuse_cached_blocks && blockRepo_) {
+      auto existing = blockRepo_->LoadLatest(derived_block_id);
+      if (!existing.HasError() &&
+          HasTag(existing.value().tags(), normalization_key_tag)) {
+        published_block = PublishedBlock(existing.value().Id(),
+                                         existing.value().version());
+        reused_cached_block = true;
+      }
+    }
+
+    if (!reused_cached_block) {
+      auto normalized =
+          blockNormalizer_->NormalizeBlock({.source_block = source_block,
+                                           .style = request.style});
+      if (normalized.HasError()) {
+        return Result<std::vector<Fragment>>(normalized.error());
+      }
+
+      const Template normalized_template(normalized.value().templ);
+      if (PlaceholderSet(source_block.templ()) !=
+          PlaceholderSet(normalized_template)) {
+        return Result<std::vector<Fragment>>(
+            Error{ErrorCode::InvalidParamType,
+                  "Normalized block changed required placeholders"});
+      }
+
+      if (!persist_derived_blocks) {
+        // Preview mode: report what normalization would produce without
+        // writing a new Block to storage. rewritten_blocks still reports
+        // the deterministic id this BlockRef would become if applied.
+        result.push_back(
+            Fragment::MakeStaticText(normalized_template.Content()));
+        rewritten_blocks.emplace_back(source_block.Id(), derived_block_id);
+        continue;
+      }
+
+      BlockDraftBuilder block_builder(derived_block_id);
+      block_builder.WithType(source_block.type())
+          .WithLanguage(
+              normalized.value().language.value_or(source_block.language()))
+          .WithDescription(
+              normalized.value().description.value_or(source_block.description()))
+          .WithTemplate(normalized_template)
+          .WithDefaults(source_block.defaults())
+          .WithParamSchema(source_block.param_schema());
+      for (const auto& tag : source_block.tags()) {
+        block_builder.WithTag(tag);
+      }
+      block_builder.WithTag("normalized");
+      block_builder.WithTag(normalization_key_tag);
+
+      Result<PublishedBlock> publish_result(Error{ErrorCode::StorageError, ""});
+      if (blockRepo_->LoadLatest(derived_block_id).HasError()) {
+        publish_result = PublishBlock(block_builder.build(), Version{1, 0});
+      } else {
+        publish_result = PublishBlock(block_builder.build(), VersionBump::Minor);
+      }
+      if (publish_result.HasError()) {
+        return Result<std::vector<Fragment>>(publish_result.error());
+      }
+      published_block = publish_result.value();
+    }
+
+    BlockRef new_ref(published_block.ref().GetBlockId(), published_block.version(),
+                     block_ref.LocalParams());
+    result.push_back(Fragment::MakeBlockRef(std::move(new_ref)));
+    rewritten_blocks.emplace_back(source_block.Id(), published_block.id());
+  }
+
+  return Result<std::vector<Fragment>>(std::move(result));
+}
+
+Result<std::vector<std::string>> Engine::FragmentTreeToPreviewText(
+    const std::vector<Fragment>& fragments,
+    const std::optional<std::string>& delimiter) const {
+  std::vector<std::string> texts;
+  texts.reserve(fragments.size());
+
+  for (const auto& fragment : fragments) {
+    if (fragment.IsSeparator()) {
+      texts.push_back(fragment.AsSeparator().toString());
+      continue;
+    }
+
+    if (fragment.IsStaticText()) {
+      texts.push_back(fragment.AsStaticText().text());
+      continue;
+    }
+
+    if (fragment.IsConditional()) {
+      const Conditional& cond = fragment.AsConditional();
+      std::ostringstream block;
+      bool is_first_branch = true;
+      for (const auto& branch : cond.branches) {
+        auto branch_texts = FragmentTreeToPreviewText(branch.content, delimiter);
+        if (branch_texts.HasError()) {
+          return Result<std::vector<std::string>>(branch_texts.error());
+        }
+        if (!is_first_branch) {
+          block << "\n";
+        }
+        block << RenderBranchLabel(branch.conditions,
+                                   is_first_branch ? "if" : "elif")
+              << "\n" << JoinWithDelimiter(branch_texts.value(), delimiter);
+        is_first_branch = false;
+      }
+      if (cond.elseContent.has_value()) {
+        auto else_texts = FragmentTreeToPreviewText(*cond.elseContent, delimiter);
+        if (else_texts.HasError()) {
+          return Result<std::vector<std::string>>(else_texts.error());
+        }
+        block << "\n[else]\n" << JoinWithDelimiter(else_texts.value(), delimiter);
+      }
+      texts.push_back(block.str());
+      continue;
+    }
+
+    const auto& block_ref = fragment.AsBlockRef();
+    auto block_result = block_ref.version().has_value()
+                            ? LoadBlock(block_ref.GetBlockId(), *block_ref.version())
+                            : LoadBlock(block_ref.GetBlockId());
+    if (block_result.HasError()) {
+      return Result<std::vector<std::string>>(block_result.error());
+    }
+    texts.push_back(block_result.value().templ().Content());
+  }
+
+  return Result<std::vector<std::string>>(std::move(texts));
+}
+
 Result<NormalizedCompositionPreview> Engine::PreviewNormalizeComposition(
     const CompositionNormalizationRequest& request) {
   TF_LOG_DEBUG("Previewing normalized composition [id={}]",
@@ -908,124 +1149,40 @@ Result<NormalizedCompositionPreview> Engine::PreviewNormalizeComposition(
     if (!existing.HasError() && existing.value().GetStyleProfile().has_value() &&
         StyleKey(existing.value().GetStyleProfile()->semantic) ==
             StyleKey(request.style)) {
-      std::vector<std::string> fragment_texts;
-      fragment_texts.reserve(existing.value().fragments().size());
-      for (const auto& fragment : existing.value().fragments()) {
-        if (fragment.IsSeparator()) {
-          fragment_texts.push_back(fragment.AsSeparator().toString());
-          continue;
-        }
-        if (fragment.IsStaticText()) {
-          fragment_texts.push_back(fragment.AsStaticText().text());
-          continue;
-        }
-        if (fragment.IsConditional()) {
-          return Result<NormalizedCompositionPreview>(
-              Error{ErrorCode::InvalidParamType,
-                    "Normalization does not yet support compositions "
-                    "containing Conditional content"});
-        }
-        const auto& block_ref = fragment.AsBlockRef();
-        auto block_result = block_ref.version().has_value()
-                                ? LoadBlock(block_ref.GetBlockId(),
-                                            *block_ref.version())
-                                : LoadBlock(block_ref.GetBlockId());
-        if (block_result.HasError()) {
-          return Result<NormalizedCompositionPreview>(block_result.error());
-        }
-        fragment_texts.push_back(block_result.value().templ().Content());
+      const auto style = EffectiveStyle(existing.value());
+      auto fragment_texts =
+          FragmentTreeToPreviewText(existing.value().fragments(), style.delimiter);
+      if (fragment_texts.HasError()) {
+        return Result<NormalizedCompositionPreview>(fragment_texts.error());
       }
 
       return Result<NormalizedCompositionPreview>(NormalizedCompositionPreview{
           .composition_id = derived_composition_id,
-          .preview_text =
-              ApplyStructuralStyle(fragment_texts, EffectiveStyle(existing.value())),
+          .preview_text = ApplyStructuralStyle(fragment_texts.value(), style),
           .rewritten_blocks = {},
       });
     }
   }
 
   std::vector<std::pair<BlockId, BlockId>> rewritten_blocks;
-  std::vector<std::string> fragment_texts;
-  fragment_texts.reserve(source.fragments().size());
+  const std::string normalization_key_tag = NormalizationKeyTag(normalization_key);
+  auto normalized_fragments =
+      NormalizeFragments(source.fragments(), request, normalization_key_tag,
+                         /*persist_derived_blocks=*/false, rewritten_blocks);
+  if (normalized_fragments.HasError()) {
+    return Result<NormalizedCompositionPreview>(normalized_fragments.error());
+  }
 
-  for (const auto& fragment : source.fragments()) {
-    if (fragment.IsSeparator()) {
-      fragment_texts.push_back(fragment.AsSeparator().toString());
-      continue;
-    }
-
-    if (fragment.IsStaticText()) {
-      std::string text = fragment.AsStaticText().text();
-      if (request.normalize_static_text && normalizer_) {
-        auto normalized = normalizer_->Normalize(text, request.style);
-        if (normalized.HasError()) {
-          return Result<NormalizedCompositionPreview>(normalized.error());
-        }
-        text = normalized.value();
-      }
-      fragment_texts.push_back(std::move(text));
-      continue;
-    }
-
-    if (fragment.IsConditional()) {
-      return Result<NormalizedCompositionPreview>(
-          Error{ErrorCode::InvalidParamType,
-                "Normalization does not yet support compositions "
-                "containing Conditional content"});
-    }
-
-    const auto& block_ref = fragment.AsBlockRef();
-    auto block_result = block_ref.version().has_value()
-                            ? LoadBlock(block_ref.GetBlockId(), *block_ref.version())
-                            : LoadBlock(block_ref.GetBlockId());
-    if (block_result.HasError()) {
-      return Result<NormalizedCompositionPreview>(block_result.error());
-    }
-
-    const Block source_block = block_result.value();
-    const std::string derived_block_id = DerivedNormalizedBlockId(
-        source_block, request.style, blockNormalizer_->Fingerprint());
-    const std::string normalization_key_tag =
-        NormalizationKeyTag(normalization_key);
-
-    bool reused_cached_block = false;
-    if (request.reuse_cached_blocks && blockRepo_) {
-      auto existing = blockRepo_->LoadLatest(derived_block_id);
-      if (!existing.HasError() &&
-          HasTag(existing.value().tags(), normalization_key_tag)) {
-        fragment_texts.push_back(existing.value().templ().Content());
-        rewritten_blocks.emplace_back(source_block.Id(), derived_block_id);
-        reused_cached_block = true;
-      }
-    }
-
-    if (reused_cached_block) {
-      continue;
-    }
-
-    auto normalized =
-        blockNormalizer_->NormalizeBlock({.source_block = source_block,
-                                         .style = request.style});
-    if (normalized.HasError()) {
-      return Result<NormalizedCompositionPreview>(normalized.error());
-    }
-
-    const Template normalized_template(normalized.value().templ);
-    if (PlaceholderSet(source_block.templ()) != PlaceholderSet(normalized_template)) {
-      return Result<NormalizedCompositionPreview>(
-          Error{ErrorCode::InvalidParamType,
-                "Normalized block changed required placeholders"});
-    }
-
-    fragment_texts.push_back(normalized_template.Content());
-    rewritten_blocks.emplace_back(source_block.Id(), derived_block_id);
+  const auto style = EffectiveStyle(source);
+  auto fragment_texts =
+      FragmentTreeToPreviewText(normalized_fragments.value(), style.delimiter);
+  if (fragment_texts.HasError()) {
+    return Result<NormalizedCompositionPreview>(fragment_texts.error());
   }
 
   return Result<NormalizedCompositionPreview>(NormalizedCompositionPreview{
       .composition_id = derived_composition_id,
-      .preview_text =
-          ApplyStructuralStyle(fragment_texts, EffectiveStyle(source)),
+      .preview_text = ApplyStructuralStyle(fragment_texts.value(), style),
       .rewritten_blocks = std::move(rewritten_blocks),
   });
 }
@@ -1081,111 +1238,29 @@ Result<NormalizedCompositionResult> Engine::NormalizeComposition(
   builder.WithStyleProfile(style_profile);
 
   std::vector<std::pair<BlockId, BlockId>> rewritten_blocks;
+  const std::string normalization_key_tag = NormalizationKeyTag(normalization_key);
+  auto normalized_fragments =
+      NormalizeFragments(source.fragments(), request, normalization_key_tag,
+                         /*persist_derived_blocks=*/true, rewritten_blocks);
+  if (normalized_fragments.HasError()) {
+    return Result<NormalizedCompositionResult>(normalized_fragments.error());
+  }
 
-  for (const auto& fragment : source.fragments()) {
-    if (fragment.IsSeparator()) {
-      builder.AddSeparator(fragment.AsSeparator().type);
-      continue;
+  for (auto& fragment : normalized_fragments.value()) {
+    switch (fragment.type()) {
+      case FragmentType::BlockRef:
+        builder.AddBlockRef(std::move(fragment.AsBlockRef()));
+        break;
+      case FragmentType::StaticText:
+        builder.AddStaticText(std::move(fragment.AsStaticText().content));
+        break;
+      case FragmentType::Separator:
+        builder.AddSeparator(fragment.AsSeparator().type);
+        break;
+      case FragmentType::Conditional:
+        builder.AddConditional(std::move(fragment.AsConditional()));
+        break;
     }
-
-    if (fragment.IsStaticText()) {
-      std::string text = fragment.AsStaticText().text();
-      if (request.normalize_static_text && normalizer_) {
-        auto normalized = normalizer_->Normalize(text, request.style);
-        if (normalized.HasError()) {
-          return Result<NormalizedCompositionResult>(normalized.error());
-        }
-        text = normalized.value();
-      }
-      builder.AddStaticText(std::move(text));
-      continue;
-    }
-
-    if (fragment.IsConditional()) {
-      // Normalization doesn't recurse into Conditional branches yet.
-      // Reject rather than silently passing the subtree through --
-      // PreviewNormalizeComposition (both paths) already refuses
-      // Conditional content, and a derivative that passed it through
-      // unchanged would make a later preview of that same derivative
-      // fail on the apply's own valid output.
-      return Result<NormalizedCompositionResult>(
-          Error{ErrorCode::InvalidParamType,
-                "Normalization does not yet support compositions "
-                "containing Conditional content"});
-    }
-
-    const auto& block_ref = fragment.AsBlockRef();
-    auto block_result = block_ref.version().has_value()
-                            ? LoadBlock(block_ref.GetBlockId(), *block_ref.version())
-                            : LoadBlock(block_ref.GetBlockId());
-    if (block_result.HasError()) {
-      return Result<NormalizedCompositionResult>(block_result.error());
-    }
-
-    const Block source_block = block_result.value();
-    const std::string derived_block_id = DerivedNormalizedBlockId(
-        source_block, request.style, blockNormalizer_->Fingerprint());
-    const std::string normalization_key_tag =
-        NormalizationKeyTag(normalization_key);
-
-    PublishedBlock published_block(derived_block_id, Version{1, 0});
-    bool reused_cached_block = false;
-    if (request.reuse_cached_blocks && blockRepo_) {
-      auto existing = blockRepo_->LoadLatest(derived_block_id);
-      if (!existing.HasError() &&
-          HasTag(existing.value().tags(), normalization_key_tag)) {
-        published_block = PublishedBlock(existing.value().Id(),
-                                         existing.value().version());
-        reused_cached_block = true;
-      }
-    }
-
-    if (!reused_cached_block) {
-      auto normalized =
-          blockNormalizer_->NormalizeBlock({.source_block = source_block,
-                                           .style = request.style});
-      if (normalized.HasError()) {
-        return Result<NormalizedCompositionResult>(normalized.error());
-      }
-
-      const Template normalized_template(normalized.value().templ);
-      if (PlaceholderSet(source_block.templ()) != PlaceholderSet(normalized_template)) {
-        return Result<NormalizedCompositionResult>(
-            Error{ErrorCode::InvalidParamType,
-                  "Normalized block changed required placeholders"});
-      }
-
-      BlockDraftBuilder block_builder(derived_block_id);
-      block_builder.WithType(source_block.type())
-          .WithLanguage(normalized.value().language.value_or(source_block.language()))
-          .WithDescription(
-              normalized.value().description.value_or(source_block.description()))
-          .WithTemplate(normalized_template)
-          .WithDefaults(source_block.defaults())
-          .WithParamSchema(source_block.param_schema());
-      for (const auto& tag : source_block.tags()) {
-        block_builder.WithTag(tag);
-      }
-      block_builder.WithTag("normalized");
-      block_builder.WithTag(normalization_key_tag);
-
-      Result<PublishedBlock> publish_result(Error{ErrorCode::StorageError, ""});
-      if (blockRepo_->LoadLatest(derived_block_id).HasError()) {
-        publish_result = PublishBlock(block_builder.build(), Version{1, 0});
-      } else {
-        publish_result = PublishBlock(block_builder.build(), VersionBump::Minor);
-      }
-      if (publish_result.HasError()) {
-        return Result<NormalizedCompositionResult>(publish_result.error());
-      }
-      published_block = publish_result.value();
-    }
-
-    builder.AddBlockRef(published_block.ref().GetBlockId(),
-                        published_block.version().major,
-                        published_block.version().minor,
-                        block_ref.LocalParams());
-    rewritten_blocks.emplace_back(source_block.Id(), published_block.id());
   }
 
   Result<PublishedComposition> publish_composition(

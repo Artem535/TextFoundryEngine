@@ -461,6 +461,43 @@ class Engine {
    */
   [[nodiscard]] Error SaveComposition(const Composition& composition);
 
+  /**
+   * Recursively normalizes a fragment list: StaticText via the configured
+   * INormalizer (if request.normalize_static_text), BlockRef via the
+   * configured IBlockNormalizer, Separator unchanged, and Conditional by
+   * normalizing every branch's content and elseContent with this same
+   * method. Used by NormalizeComposition and by
+   * PreviewNormalizeComposition's fresh (non-cached) path.
+   *
+   * `persist_derived_blocks` controls whether a freshly-normalized BlockRef
+   * (one not already satisfied by an existing tagged cached Block) gets
+   * published as a new Block: true for NormalizeComposition (the point of
+   * applying is to create the derivative), false for Preview (which must
+   * stay side-effect-free -- a not-persisted BlockRef comes back as an
+   * inline StaticText holding the normalized text instead of a BlockRef to
+   * a Block that was never actually created). A reused, already-tagged
+   * cached Block is referenced via a real BlockRef in both modes, since
+   * referencing something that already exists isn't a new write.
+   */
+  [[nodiscard]] Result<std::vector<Fragment>> NormalizeFragments(
+      const std::vector<Fragment>& fragments,
+      const CompositionNormalizationRequest& request,
+      const std::string& normalization_key_tag, bool persist_derived_blocks,
+      std::vector<std::pair<BlockId, BlockId>>& rewritten_blocks);
+
+  /**
+   * Converts an already-normalized fragment list into one preview-text
+   * string per top-level fragment, with no LLM calls -- just reading
+   * StaticText/Separator/Block content. A Conditional expands into a
+   * labeled if/elif/else block; `delimiter` (the composition's effective
+   * StructuralStyle::delimiter) is threaded into the recursion so a
+   * branch's own multiple fragments join the same way Renderer does after
+   * flattening a selected branch into the top-level fragment list.
+   */
+  [[nodiscard]] Result<std::vector<std::string>> FragmentTreeToPreviewText(
+      const std::vector<Fragment>& fragments,
+      const std::optional<std::string>& delimiter) const;
+
   // ==================== Helpers ====================
   Result<Version> GetNextVersion(const BlockId& id, VersionBump bump);
 };
