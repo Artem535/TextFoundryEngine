@@ -29,9 +29,11 @@ New private method, replacing the body of both flat loops' per-fragment logic:
 Result<std::vector<Fragment>> Engine::NormalizeFragments(
     const std::vector<Fragment>& fragments,
     const CompositionNormalizationRequest& request,
-    const std::string& normalization_key_tag,
+    const std::string& normalization_key_tag, bool persist_derived_blocks,
     std::vector<std::pair<BlockId, BlockId>>& rewritten_blocks);
 ```
+
+**Amendment:** the signature above includes `persist_derived_blocks` (added after this design's first implementation, once code review caught that `PreviewNormalizeComposition`'s fresh path was silently publishing new `Block`s via this method). `true` for `NormalizeComposition` (apply, which is meant to persist derived blocks); `false` for `PreviewNormalizeComposition`'s fresh path. When `false`, a freshly-normalized `BlockRef` is not published — it comes back as an inline `Fragment::MakeStaticText(normalized_template.Content())` instead of a `BlockRef`, and `rewritten_blocks` still records the `(source_block.Id(), derived_block_id)` pair that applying would produce. A `BlockRef` satisfied by an existing tagged cached `Block` is unaffected by this flag: referencing something that already exists isn't a new write, so it's still returned as a real `BlockRef` in both modes.
 
 Per fragment, in order:
 
@@ -96,7 +98,7 @@ Both call sites need their `EffectiveStyle(...)` call (which today only happens 
 
 Both `PreviewNormalizeComposition` code paths end the same way they do today: `ApplyStructuralStyle(fragment_texts, style)`, unchanged — it already treats each entry as an opaque string, so a multi-line Conditional block joins/wraps/delimits exactly like any other fragment's text.
 
-One deliberate tradeoff: the fresh path now does one extra `LoadBlock` per derived `BlockRef` (inside `FragmentTreeToPreviewText`) instead of reusing the `normalized_template` string already sitting in a local variable from the derivation step a few lines earlier. This trades a small, cheap, local repository read for not having two separate "turn a fragment into preview text" code paths. Given `reuse_cached_blocks` already avoids the *expensive* part (the LLM call) on repeat requests, this is judged worth it for the code-size reduction.
+**Superseded by the `persist_derived_blocks` amendment above:** this paragraph originally described the fresh path doing one extra `LoadBlock` per derived `BlockRef` (inside `FragmentTreeToPreviewText`) instead of reusing the `normalized_template` string already sitting in a local variable from the derivation step a few lines earlier. That's no longer what happens: with `persist_derived_blocks=false`, a freshly-normalized `BlockRef` never gets far enough to need a `LoadBlock` in the first place — `NormalizeFragments` returns it as an inline `StaticText` holding `normalized_template.Content()` directly, since the underlying `Block` was never published and a `LoadBlock` against its `derived_block_id` would fail. `FragmentTreeToPreviewText` still reads it with zero extra I/O; there is no tradeoff to make.
 
 ### 3. `rewritten_blocks` and nested `BlockRef`
 

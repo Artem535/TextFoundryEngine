@@ -15,6 +15,8 @@
 - No changes to `Renderer`, `Conditional::validate`, the CLI/DTO layer, or `CompositionBlockRewrite`.
 - Spec: `docs/superpowers/specs/2026-09-23-normalization-conditional-support-design.md` — read it before starting if anything below is unclear.
 
+**Post-implementation amendment:** this plan (and its code snippets below) predate a follow-up fix, landed after code review, that adds a `bool persist_derived_blocks` parameter to `NormalizeFragments` — every `NormalizeFragments(...)` signature/call snippet in the tasks below is missing that parameter. See the spec's own amendment note (same section referenced above) for the authoritative current signature and behavior; `tf/engine.h`/`tf/engine.cc` on `main` reflect the shipped, corrected version.
+
 ---
 
 ## File Structure
