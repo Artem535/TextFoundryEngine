@@ -11,9 +11,11 @@ endif()
 
 add_executable(core_tests
         test_main.cc
+        logger_thread_test.cc
 )
 
-target_link_libraries(core_tests textfoundry_core textfoundry_objectbox_store doctest::doctest)
+find_package(Threads REQUIRED)
+target_link_libraries(core_tests textfoundry_core textfoundry_objectbox_store doctest::doctest Threads::Threads)
 
 if(UNIX AND TARGET objectbox)
   set_property(TARGET core_tests PROPERTY BUILD_WITH_INSTALL_RPATH OFF)

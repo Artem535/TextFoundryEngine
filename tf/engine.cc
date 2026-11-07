@@ -287,14 +287,14 @@ StructuralStyle EffectiveStyle(const Composition& composition) {
 
 Engine::Engine() : config_{}, renderer_(std::make_unique<Renderer>()) {
   TF_LOG_INFO("Engine initialized with default config");
-  FullInit();
+  if (!config_.defer_init) FullInit();
 }
 
 Engine::Engine(EngineConfig config)
     : config_(std::move(config)), renderer_(std::make_unique<Renderer>()) {
   TF_LOG_INFO("Engine initialized with custom config [project={}, db_path={}]",
               config_.ProjectKey, config_.default_data_path);
-  FullInit();
+  if (!config_.defer_init) FullInit();
 }
 
 void Engine::SetBlockRepository(std::shared_ptr<IBlockRepository> repo) {

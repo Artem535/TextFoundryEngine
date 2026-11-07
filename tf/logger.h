@@ -7,6 +7,7 @@
 #include <spdlog/spdlog.h>
 
 #include <memory>
+#include <mutex>
 #include <string>
 
 namespace tf {
@@ -48,6 +49,8 @@ class Logger {
   static void SetLevel(LogLevel level);
 
  private:
+  static void InitConsoleLocked(LogLevel level);
+  static std::mutex mutex_;
   static std::shared_ptr<spdlog::logger> instance_;
   static bool initialized_;
 };

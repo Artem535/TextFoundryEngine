@@ -11,6 +11,7 @@ namespace tf {
 
 std::shared_ptr<spdlog::logger> Logger::instance_ = nullptr;
 bool Logger::initialized_ = false;
+std::mutex Logger::mutex_;
 
 static spdlog::level::level_enum toSpdlogLevel(const LogLevel level) {
   switch (level) {
@@ -34,6 +35,11 @@ static spdlog::level::level_enum toSpdlogLevel(const LogLevel level) {
 }
 
 void Logger::init(LogLevel level) {
+  std::lock_guard lock(mutex_);
+  InitConsoleLocked(level);
+}
+
+void Logger::InitConsoleLocked(LogLevel level) {
   if (initialized_) {
     return;
   }
@@ -47,6 +53,7 @@ void Logger::init(LogLevel level) {
 }
 
 void Logger::init(const std::string& logFile, LogLevel level) {
+  std::lock_guard lock(mutex_);
   if (initialized_) {
     return;
   }
@@ -59,6 +66,7 @@ void Logger::init(const std::string& logFile, LogLevel level) {
 }
 
 void Logger::shutdown() {
+  std::lock_guard lock(mutex_);
   // Drop our own reference first...
   instance_.reset();
   // ...then explicitly tear down spdlog's global registry while we are still
@@ -85,13 +93,13 @@ void Logger::shutdown() {
 }
 
 std::shared_ptr<spdlog::logger> Logger::get() {
-  if (!initialized_) {
-    init(LogLevel::Info);
-  }
+  std::lock_guard lock(mutex_);
+  InitConsoleLocked(LogLevel::Info);
   return instance_;
 }
 
 void Logger::SetLevel(LogLevel level) {
+  std::lock_guard lock(mutex_);
   if (instance_) {
     instance_->set_level(toSpdlogLevel(level));
   }
