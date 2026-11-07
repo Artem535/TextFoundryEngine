@@ -35,7 +35,125 @@ cli::CompositionDto MakeConditionalDto() {
   return composition;
 }
 
+cli::CompositionDto MakeGroupDto() {
+  cli::FragmentDto first;
+  first.kind = "static_text";
+  first.static_text = cli::StaticTextFragmentDto{"first"};
+
+  cli::FragmentDto second;
+  second.kind = "static_text";
+  second.static_text = cli::StaticTextFragmentDto{"second"};
+
+  cli::GroupItemDto item1;
+  item1.content.push_back(first);
+  cli::GroupItemDto item2;
+  item2.content.push_back(second);
+
+  cli::FragmentDto group;
+  group.kind = "group";
+  group.group = cli::GroupFragmentDto{"bulleted", {item1, item2}};
+
+  cli::CompositionDto composition;
+  composition.id = "shopping_list";
+  composition.fragments.push_back(std::move(group));
+  return composition;
+}
+
+cli::CompositionDto MakeBlockElementDto() {
+  cli::FragmentDto text;
+  text.kind = "static_text";
+  text.static_text = cli::StaticTextFragmentDto{"Title"};
+
+  cli::FragmentDto heading;
+  heading.kind = "block_element";
+  heading.block_element = cli::BlockElementFragmentDto{"heading", "2", {text}};
+
+  cli::CompositionDto composition;
+  composition.id = "doc.with_heading";
+  composition.fragments.push_back(std::move(heading));
+  return composition;
+}
+
 }  // namespace
+
+TEST_CASE("group composition DTO round-trips and converts to a draft") {
+  const auto source = MakeGroupDto();
+  const auto json = rfl::json::write(source);
+  const auto parsed = rfl::json::read<cli::CompositionDto>(json);
+
+  REQUIRE(parsed.has_value());
+  const auto converted = cli::ToComposition(parsed.value());
+  REQUIRE(converted.HasValue());
+  CHECK(converted.value().validate().is_success());
+  REQUIRE(converted.value().fragmentCount() == 1);
+  REQUIRE(converted.value().fragment(0).IsGroup());
+  const tf::Group& group = converted.value().fragment(0).AsGroup();
+  CHECK(group.kind == tf::GroupKind::Bulleted);
+  REQUIRE(group.items.size() == 2);
+  CHECK(group.items[0][0].AsStaticText().text() == "first");
+  CHECK(group.items[1][0].AsStaticText().text() == "second");
+}
+
+TEST_CASE(
+    "group composition DTO closes the loop through the real --from-json "
+    "production path (ToCompositionDraft), published and rendered") {
+  const auto source = MakeGroupDto();
+  const auto json = rfl::json::write(source);
+  const auto parsed = rfl::json::read<cli::CompositionDto>(json);
+  REQUIRE(parsed.has_value());
+
+  auto draft = cli::ToCompositionDraft(parsed.value(), "default");
+  REQUIRE(draft.HasValue());
+
+  tf::EngineConfig config;
+  config.default_data_path = "memory:cli_dto_group_roundtrip_render";
+  tf::Engine engine(std::move(config));
+
+  auto published = engine.PublishComposition(std::move(draft).value());
+  REQUIRE(published.HasValue());
+
+  auto result = engine.Render(published.value().id());
+  REQUIRE(result.HasValue());
+  CHECK(result.value().text == "- first\n- second");
+}
+
+TEST_CASE("block_element composition DTO round-trips and converts to a draft") {
+  const auto source = MakeBlockElementDto();
+  const auto json = rfl::json::write(source);
+  const auto parsed = rfl::json::read<cli::CompositionDto>(json);
+
+  REQUIRE(parsed.has_value());
+  const auto converted = cli::ToComposition(parsed.value());
+  REQUIRE(converted.HasValue());
+  CHECK(converted.value().validate().is_success());
+  REQUIRE(converted.value().fragmentCount() == 1);
+  REQUIRE(converted.value().fragment(0).IsBlockElement());
+  const tf::BlockElement& element = converted.value().fragment(0).AsBlockElement();
+  CHECK(element.kind == tf::BlockElementKind::Heading);
+  CHECK(element.attr == "2");
+  CHECK(element.content[0].AsStaticText().text() == "Title");
+}
+
+TEST_CASE("an invalid heading level DTO is rejected") {
+  auto source = MakeBlockElementDto();
+  source.fragments.front().block_element->attr = "9";
+
+  const auto converted = cli::ToComposition(source);
+
+  REQUIRE(converted.HasError());
+  CHECK(converted.error().code == tf::ErrorCode::InvalidHeadingLevel);
+}
+
+TEST_CASE("fragment DTO rejects a group discriminator with the wrong payload") {
+  cli::FragmentDto fragment;
+  fragment.kind = "group";
+  fragment.static_text = cli::StaticTextFragmentDto{"oops"};
+
+  const auto converted = cli::ToFragment(fragment);
+
+  REQUIRE(converted.HasError());
+  CHECK(converted.error().code == tf::ErrorCode::InvalidParamType);
+}
 
 TEST_CASE("conditional composition DTO round-trips and converts to a draft") {
   const auto source = MakeConditionalDto();

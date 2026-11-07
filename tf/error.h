@@ -42,6 +42,8 @@ enum class ErrorCode {
   EmptyConditional,        ///< Conditional has zero branches (only Else, or nothing at all)
   EmptyBranchConditions,   ///< A Branch has zero Conditions (always matches -- likely a bug)
   MissingElseBranch,       ///< Conditional::elseContent is std::nullopt
+  EmptyGroup,              ///< Group has zero items
+  InvalidHeadingLevel,     ///< BlockElement is Heading and attr isn't "1".."6"
 
   // Storage errors
   StorageError,  ///< Underlying storage failure
@@ -101,6 +103,16 @@ struct Error {
   [[nodiscard]] static Error MissingElseBranch() {
     return Error{ErrorCode::MissingElseBranch,
                  "Conditional must have an explicit else branch"};
+  }
+
+  [[nodiscard]] static Error EmptyGroup() {
+    return Error{ErrorCode::EmptyGroup,
+                 "Group must have at least one item"};
+  }
+
+  [[nodiscard]] static Error InvalidHeadingLevel() {
+    return Error{ErrorCode::InvalidHeadingLevel,
+                 "Heading level must be an integer from 1 to 6"};
   }
 
   [[nodiscard]] static Error success() { return Error{ErrorCode::Success, ""}; }

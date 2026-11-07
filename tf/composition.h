@@ -271,6 +271,10 @@ class CompositionDraftBuilder {
 
   CompositionDraftBuilder& AddConditional(Conditional cond);
 
+  CompositionDraftBuilder& AddGroup(Group group);
+
+  CompositionDraftBuilder& AddBlockElement(BlockElement element);
+
   [[nodiscard]] CompositionDraft build();
 
  private:

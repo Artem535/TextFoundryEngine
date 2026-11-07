@@ -44,12 +44,29 @@ struct ConditionalFragmentDto {
   std::optional<std::vector<FragmentDto>> else_content;
 };
 
+struct GroupItemDto {
+  std::vector<FragmentDto> content;
+};
+
+struct GroupFragmentDto {
+  std::string kind;  // "bulleted" | "numbered"
+  std::vector<GroupItemDto> items;
+};
+
+struct BlockElementFragmentDto {
+  std::string kind;  // "heading" | "quote" | "code_block"
+  std::string attr;
+  std::vector<FragmentDto> content;
+};
+
 struct FragmentDto {
   std::string kind;
   std::optional<BlockRefFragmentDto> block_ref;
   std::optional<StaticTextFragmentDto> static_text;
   std::optional<SeparatorFragmentDto> separator;
   std::optional<ConditionalFragmentDto> conditional;
+  std::optional<GroupFragmentDto> group;
+  std::optional<BlockElementFragmentDto> block_element;
 };
 
 struct CompositionDto {

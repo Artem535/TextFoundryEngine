@@ -287,14 +287,14 @@ StructuralStyle EffectiveStyle(const Composition& composition) {
 
 Engine::Engine() : config_{}, renderer_(std::make_unique<Renderer>()) {
   TF_LOG_INFO("Engine initialized with default config");
-  FullInit();
+  if (!config_.defer_init) FullInit();
 }
 
 Engine::Engine(EngineConfig config)
     : config_(std::move(config)), renderer_(std::make_unique<Renderer>()) {
   TF_LOG_INFO("Engine initialized with custom config [project={}, db_path={}]",
               config_.ProjectKey, config_.default_data_path);
-  FullInit();
+  if (!config_.defer_init) FullInit();
 }
 
 void Engine::SetBlockRepository(std::shared_ptr<IBlockRepository> repo) {
@@ -969,6 +969,18 @@ Result<std::vector<Fragment>> Engine::NormalizeFragments(
       continue;
     }
 
+    if (fragment.IsGroup() || fragment.IsBlockElement()) {
+      // Normalization doesn't recurse into Group/BlockElement content yet
+      // (deferred to a follow-up spec, same as Conditional was before its
+      // own normalization support shipped). Reject rather than silently
+      // passing the subtree through -- that would skip normalizing any
+      // BlockRef nested inside a list item or heading.
+      return Result<std::vector<Fragment>>(
+          Error{ErrorCode::InvalidParamType,
+                "Normalization does not yet support compositions "
+                "containing Group or BlockElement content"});
+    }
+
     const auto& block_ref = fragment.AsBlockRef();
     auto block_result = block_ref.version().has_value()
                             ? LoadBlock(block_ref.GetBlockId(), *block_ref.version())
@@ -1098,6 +1110,15 @@ Result<std::vector<std::string>> Engine::FragmentTreeToPreviewText(
       }
       texts.push_back(block.str());
       continue;
+    }
+
+    if (fragment.IsGroup() || fragment.IsBlockElement()) {
+      // See the matching guard in NormalizeFragments -- normalization
+      // doesn't recurse into Group/BlockElement content yet.
+      return Result<std::vector<std::string>>(
+          Error{ErrorCode::InvalidParamType,
+                "Normalization does not yet support compositions "
+                "containing Group or BlockElement content"});
     }
 
     const auto& block_ref = fragment.AsBlockRef();

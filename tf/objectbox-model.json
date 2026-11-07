@@ -304,7 +304,7 @@
     },
     {
       "id": "5:6439213067573313049",
-      "lastPropertyId": "12:4652074642894527854",
+      "lastPropertyId": "14:3579003960135828897",
       "name": "ObxFragment",
       "properties": [
         {
@@ -373,6 +373,16 @@
         {
           "id": "12:4652074642894527854",
           "name": "conditionalJson",
+          "type": 9
+        },
+        {
+          "id": "13:3742058836485828810",
+          "name": "groupJson",
+          "type": 9
+        },
+        {
+          "id": "14:3579003960135828897",
+          "name": "blockElementJson",
           "type": 9
         }
       ]

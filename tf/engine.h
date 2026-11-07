@@ -29,6 +29,12 @@ struct EngineConfig {
   std::string default_data_path =
       "memory:tf";  ///< Default data path for block and composition
                     ///< repositories
+  /// When true the constructors skip FullInit(), so the caller can supply its
+  /// own ObjectBox-backed repositories. A consumer needs this to own the
+  /// obx::Store itself, for example to wrap a batch of writes in one write
+  /// transaction. ObjectBox allows only one open store per path per process,
+  /// so the caller must be the single owner; Engine::FullInit() must not run.
+  bool defer_init = false;
 };
 
 /**
